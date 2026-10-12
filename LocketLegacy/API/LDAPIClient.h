@@ -33,6 +33,12 @@ typedef void (^LDJSONCompletion)(NSDictionary * _Nullable json, NSError * _Nulla
 
 typedef void (^LDProgressBlock)(NSString *stage);
 
+// Social / extras (mirror upstream UX on self-host)
+- (void)getOverlaysWithCompletion:(LDJSONCompletion)completion;
+- (void)reactToMoment:(NSString *)momentId emoji:(NSString *)emoji completion:(LDJSONCompletion)completion;
+- (void)sendMessageWithText:(NSString *)text completion:(LDJSONCompletion)completion;
+- (void)registerPushToken:(NSString *)token completion:(LDJSONCompletion)completion;
+
 // Original web-client method (mirrors createRequestPayloadV5 + PostMoments):
 //  1/3 POST {storage}/api/presignedV3  -> {url, publicURL, key}
 //  2/3 PUT raw bytes to the presigned url
@@ -44,6 +50,7 @@ typedef void (^LDProgressBlock)(NSString *stage);
                                  isVideo:(BOOL)isVideo
                                  caption:(NSString *)caption
                                 audience:(NSString *)audience
+                             extraOptions:(nullable NSDictionary *)extra
                                 progress:(nullable LDProgressBlock)progress
                               completion:(LDJSONCompletion)completion;
 

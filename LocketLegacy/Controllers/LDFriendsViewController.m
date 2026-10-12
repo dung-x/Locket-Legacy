@@ -1,5 +1,6 @@
 #import "LDFriendsViewController.h"
 #import "../API/LDAPIClient.h"
+#import "../API/LDDiskCache.h"
 #import "../Models/LDFriend.h"
 #import "../Views/LDFriendCell.h"
 
@@ -31,8 +32,14 @@
 }
 
 - (void)load {
+    id cached = [LDDiskCache loadFriendsJSON];
+    if (cached && !self.friends.count) {
+        self.friends = [LDFriend listFromJSON:cached];
+        [self.table reloadData];
+    }
     [[LDAPIClient shared] getAllFriendsWithCompletion:^(NSDictionary *json, NSError *error) {
         if (!error) {
+            [LDDiskCache saveFriendsJSON:json];
             self.friends = [LDFriend listFromJSON:json];
             [self.table reloadData];
         }

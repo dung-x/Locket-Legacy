@@ -1,6 +1,14 @@
 #import "LDAPIClient.h"
 #import "../Config.h"
 
+@interface LDAPIClient ()
+- (void)POST:(NSString *)path body:(nullable NSDictionary *)body retried:(BOOL)retried completion:(LDJSONCompletion)completion;
+- (void)POSTURL:(NSString *)urlStr body:(NSDictionary *)body completion:(void(^)(NSDictionary * _Nullable json, NSInteger status, NSError * _Nullable error))completion;
+- (void)POSTURL:(NSString *)urlStr body:(NSDictionary *)body retried:(BOOL)retried completion:(void(^)(NSDictionary * _Nullable json, NSInteger status, NSError * _Nullable error))completion;
+- (BOOL)needsRefreshForJSON:(NSDictionary *)json status:(NSInteger)code;
+- (BOOL)tryRefreshThen:(void(^)(void))retry;
+@end
+
 @implementation LDAPIClient
 
 + (instancetype)shared {
@@ -22,6 +30,10 @@
 }
 
 - (void)POST:(NSString *)path body:(nullable NSDictionary *)body completion:(LDJSONCompletion)completion {
+    [self POST:path body:body retried:NO completion:completion];
+}
+
+- (void)POST:(NSString *)path body:(nullable NSDictionary *)body retried:(BOOL)retried completion:(LDJSONCompletion)completion {
     NSString *urlStr = [[self baseURL] stringByAppendingString:path];
     NSURL *url = [NSURL URLWithString:urlStr];
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
@@ -38,9 +50,48 @@
         NSDictionary *json = nil;
         if (d.length) json = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
         if (!json) json = @{};
-        dispatch_async(dispatch_get_main_queue(), ^{ completion(json, nil); });
+        NSInteger code = [r isKindOfClass:[NSHTTPURLResponse class]] ? ((NSHTTPURLResponse *)r).statusCode : 0;
+        if (!retried && [self needsRefreshForJSON:json status:code] && [self tryRefreshThen:^{
+            [self POST:path body:body retried:YES completion:completion];
+        }]) return;
+        NSDictionary *j = json;
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(j, nil); });
     }];
     [t resume];
+}
+
+// YES if a refresh was started (caller must return without completing).
+- (BOOL)needsRefreshForJSON:(NSDictionary *)json status:(NSInteger)code {
+    if (code == 401) return YES;
+    id err = json[@"error"];
+    if ([err isKindOfClass:[NSDictionary class]] && [err[@"code"] isKindOfClass:[NSString class]] &&
+        [err[@"code"] isEqualToString:@"UNAUTHORIZED"]) return YES;
+    return NO;
+}
+
+- (BOOL)tryRefreshThen:(void(^)(void))retry {
+    NSString *rt = [[NSUserDefaults standardUserDefaults] stringForKey:kLDKeyRefreshToken];
+    if (![rt isKindOfClass:[NSString class]] || !rt.length) return NO;
+    [self refreshToken:rt completion:^(NSDictionary *json, NSError *error) {
+        NSDictionary *data = [json isKindOfClass:[NSDictionary class]] ? json[@"data"] : nil;
+        NSString *tok = [data isKindOfClass:[NSDictionary class]] ?
+            ([data[@"id_token"] isKindOfClass:[NSString class]] ? data[@"id_token"] :
+             ([data[@"access_token"] isKindOfClass:[NSString class]] ? data[@"access_token"] : nil)) : nil;
+        if (!error && [tok isKindOfClass:[NSString class]] && tok.length > 0) {
+            self.idToken = tok;
+            [[NSUserDefaults standardUserDefaults] setObject:tok forKey:kLDKeyIDToken];
+            NSString *nr = data[@"refresh_token"];
+            if ([nr isKindOfClass:[NSString class]] && nr.length > 0) {
+                [[NSUserDefaults standardUserDefaults] setObject:nr forKey:kLDKeyRefreshToken];
+            }
+            [[NSUserDefaults standardUserDefaults] synchronize];
+            retry();
+        } else {
+            // Refresh failed — surface auth expiration to the caller path.
+            retry();
+        }
+    }];
+    return YES;
 }
 
 - (void)loginWithEmail:(NSString *)email password:(NSString *)password completion:(LDJSONCompletion)completion {
@@ -169,6 +220,10 @@ static NSString * const kLDClientVersion = @"iOS1.0";
 }
 
 - (void)POSTURL:(NSString *)urlStr body:(NSDictionary *)body completion:(void(^)(NSDictionary * _Nullable json, NSInteger status, NSError * _Nullable error))completion {
+    [self POSTURL:urlStr body:body retried:NO completion:completion];
+}
+
+- (void)POSTURL:(NSString *)urlStr body:(NSDictionary *)body retried:(BOOL)retried completion:(void(^)(NSDictionary * _Nullable json, NSInteger status, NSError * _Nullable error))completion {
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:urlStr]];
     req.HTTPMethod = @"POST";
     [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
@@ -181,6 +236,9 @@ static NSString * const kLDClientVersion = @"iOS1.0";
         if (e) { dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, code, e); }); return; }
         NSDictionary *json = d.length ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
         if (![json isKindOfClass:[NSDictionary class]]) json = @{};
+        if (!retried && [self needsRefreshForJSON:json status:code] && [self tryRefreshThen:^{
+            [self POSTURL:urlStr body:body retried:YES completion:completion];
+        }]) return;
         NSDictionary *j = json;
         dispatch_async(dispatch_get_main_queue(), ^{ completion(j, code, nil); });
     }];
@@ -191,6 +249,7 @@ static NSString * const kLDClientVersion = @"iOS1.0";
                                  isVideo:(BOOL)isVideo
                                  caption:(NSString *)caption
                                 audience:(NSString *)audience
+                             extraOptions:(NSDictionary *)extra
                                 progress:(LDProgressBlock)progress
                               completion:(LDJSONCompletion)completion {
     NSData *fileData = [NSData dataWithContentsOfURL:fileURL];
@@ -244,9 +303,12 @@ static NSString * const kLDClientVersion = @"iOS1.0";
             NSDictionary *mediaInfo = @{@"url": publicURL, @"path": key, @"name": fileName,
                                         @"size": @(fileData.length), @"uploadedAt": [[self class] isoNow], @"type": type};
             NSString *aud = ([audience isKindOfClass:[NSString class]] && audience.length) ? audience : @"all";
-            NSDictionary *options = @{@"caption": caption ?: @"", @"overlay_id": @"", @"type": @"",
-                                      @"icon": @"", @"text_color": @"", @"color_top": @"", @"color_bottom": @"",
-                                      @"audience": aud, @"recipients": @[], @"music": @""};
+            NSMutableDictionary *options = [@{@"caption": caption ?: @"", @"overlay_id": @"standard", @"type": @"default",
+                                              @"icon": @"", @"text_color": @"#FFFFFF", @"color_top": @"", @"color_bottom": @"",
+                                              @"audience": aud, @"recipients": @[], @"music": @""} mutableCopy];
+            if ([extra isKindOfClass:[NSDictionary class]]) {
+                for (id k in extra) { if ([k isKindOfClass:[NSString class]]) options[k] = extra[k] ?: @""; }
+            }
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self POST:@"/postMomentV2" body:@{@"model": @"Version-UploadmediaV3.1", @"mediaInfo": mediaInfo,
                                                    @"options": options, @"contentType": type} completion:completion];
@@ -277,6 +339,36 @@ static NSString * const kLDClientVersion = @"iOS1.0";
         }];
     };
     tryNext(nil);
+}
+
+#pragma mark - Social / extras
+
+- (void)getOverlaysWithCompletion:(LDJSONCompletion)completion {
+    NSString *u = [[LDConfig baseAPIURL] stringByAppendingString:@"/api/overlays"];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:u]];
+    req.HTTPMethod = @"GET";
+    NSURLSessionDataTask *t = [[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+        NSDictionary *json = (d.length && !e) ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+        if (![json isKindOfClass:[NSDictionary class]]) json = @{};
+        NSDictionary *j = json;
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(j, e); });
+    }];
+    [t resume];
+}
+
+- (void)reactToMoment:(NSString *)momentId emoji:(NSString *)emoji completion:(LDJSONCompletion)completion {
+    [self POST:@"/reactToMoment" body:@{@"momentId": momentId ?: @"", @"emoji": emoji ?: @"❤️"} completion:completion];
+}
+
+- (void)sendMessageWithText:(NSString *)text completion:(LDJSONCompletion)completion {
+    [self POST:@"/sendMessage" body:@{@"text": text ?: @""} completion:completion];
+}
+
+- (void)registerPushToken:(NSString *)token completion:(LDJSONCompletion)completion {
+    NSString *u = [[LDConfig baseAPIURL] stringByAppendingString:@"/api/push/register"];
+    [self POSTURL:u body:@{@"token": token ?: @"", @"platform": @"ios"} completion:^(NSDictionary *json, NSInteger status, NSError *error) {
+        completion(json, error);
+    }];
 }
 
 @end

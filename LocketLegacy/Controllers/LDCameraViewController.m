@@ -2,6 +2,7 @@
 // live preview, front/back switch, flash, photo shutter, video record, library pick.
 #import "LDCameraViewController.h"
 #import "LDPreviewViewController.h"
+#import "../Config.h"
 #import <AVFoundation/AVFoundation.h>
 #import <Photos/Photos.h>
 #import <MobileCoreServices/MobileCoreServices.h>
@@ -113,6 +114,11 @@
     ]];
 
     [self checkPermissionsAndStart];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    self.shutterButton.layer.borderColor = [LDConfig themeAccentColor].CGColor;
 }
 
 - (UIButton *)circleButton:(NSString *)title {

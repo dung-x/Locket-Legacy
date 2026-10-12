@@ -115,3 +115,21 @@ jobs:
           curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost:5001/api/presignedV3 \
             -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
             -d '{"filename":"x.exe","contentType":"application/x-msdownload","type":"image","size":3}' | grep -q 400 && echo "mime guard OK"
+          echo "=== social extras: overlays, react, chat, streak, push ==="
+          curl -sf http://localhost:5001/api/overlays | python3 -c "import json,sys; d=json.load(sys.stdin)['data']; assert 'decorative' in d and d['decorative'][0]['overlay_id']=='standard', d; print('overlays OK')"
+          MID=$(python3 -c "import json; print(json.load(open('/tmp/v2.json'))['data']['id'])")
+          curl -sf -X POST http://localhost:5001/locket/reactToMoment \
+            -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+            -d "{\"momentId\":\"$MID\",\"emoji\":\"❤️\"}" | python3 -c "import json,sys; j=json.load(sys.stdin); assert j['success'] and j['data']['reactions']['❤️']==1, j; print('react OK')"
+          curl -sf -X POST http://localhost:5001/locket/sendMessage \
+            -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+            -d '{"text":"hello chat"}' | python3 -c "import json,sys; j=json.load(sys.stdin); assert j['success'] and j['data']['text']=='hello chat', j; print('send OK')"
+          curl -sf -X POST http://localhost:5001/locket/getAllMessageV2 \
+            -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' -d '{}' \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); assert any(m['text']=='hello chat' for m in d['data']), d; print('chat read OK')"
+          curl -s -X POST http://localhost:5001/locket/getMomentV2 \
+            -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' -d '{}' \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['streak']['count']>=1, d.get('streak'); assert d['data'][0]['reactions']['❤️']==1, d['data'][0]; print('streak+reactions OK:', d['streak'])"
+          curl -sf -X POST http://localhost:5001/api/push/register \
+            -H 'Content-Type: application/json' -d '{"token":"abc123","platform":"ios"}' \
+            | python3 -c "import json,sys; j=json.load(sys.stdin); assert j['success'], j; print('push register OK')"

@@ -32,6 +32,8 @@
     if (!m.authorName.length) m.authorName = [self str:json[@"displayName"]];
     m.createdAt = [self str:json[@"createdAt"]];
     if (!m.createdAt.length) m.createdAt = [self str:json[@"timeCreated"]];
+    id rx = json[@"reactions"];
+    m.reactions = [rx isKindOfClass:[NSDictionary class]] ? rx : @{};
     return m;
 }
 + (NSArray<LDMoment *> *)listFromJSON:(id)json {

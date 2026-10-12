@@ -8,6 +8,9 @@
 @interface LDProfileViewController () <UITextFieldDelegate>
 @property (nonatomic, strong) UILabel *infoLabel;
 @property (nonatomic, strong) UITextField *serverField;
+@property (nonatomic, strong) UILabel *streakLabel;
+@property (nonatomic, strong) UISegmentedControl *themeControl;
+@property (nonatomic, strong) UISwitch *pushSwitch;
 @end
 
 @implementation LDProfileViewController
@@ -71,6 +74,49 @@
     out.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:out];
 
+    UILabel *streakCap = [[UILabel alloc] init];
+    streakCap.text = @"🔥 Posting streak";
+    streakCap.textColor = [UIColor colorWithWhite:0.65 alpha:1];
+    streakCap.font = [UIFont boldSystemFontOfSize:12];
+    streakCap.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:streakCap];
+
+    self.streakLabel = [[UILabel alloc] init];
+    self.streakLabel.text = @"—";
+    self.streakLabel.textColor = [UIColor colorWithRed:1 green:0.8 blue:0.2 alpha:1];
+    self.streakLabel.font = [UIFont boldSystemFontOfSize:16];
+    self.streakLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:self.streakLabel];
+
+    UILabel *themeCap = [[UILabel alloc] init];
+    themeCap.text = @"🎨 Camera accent theme";
+    themeCap.textColor = [UIColor colorWithWhite:0.65 alpha:1];
+    themeCap.font = [UIFont boldSystemFontOfSize:12];
+    themeCap.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:themeCap];
+
+    self.themeControl = [[UISegmentedControl alloc] initWithItems:@[@"Gold", @"Violet", @"Ocean"]];
+    NSString *theme = [[NSUserDefaults standardUserDefaults] stringForKey:kLDKeyCameraTheme];
+    if ([theme isEqualToString:@"violet"]) self.themeControl.selectedSegmentIndex = 1;
+    else if ([theme isEqualToString:@"ocean"]) self.themeControl.selectedSegmentIndex = 2;
+    else self.themeControl.selectedSegmentIndex = 0;
+    [self.themeControl addTarget:self action:@selector(onTheme) forControlEvents:UIControlEventValueChanged];
+    self.themeControl.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:self.themeControl];
+
+    UILabel *pushCap = [[UILabel alloc] init];
+    pushCap.text = @"🔔 Push notifications (registers this device)";
+    pushCap.textColor = [UIColor colorWithWhite:0.65 alpha:1];
+    pushCap.font = [UIFont boldSystemFontOfSize:12];
+    pushCap.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:pushCap];
+
+    self.pushSwitch = [[UISwitch alloc] init];
+    self.pushSwitch.on = [[[NSUserDefaults standardUserDefaults] objectForKey:kLDKeyPushEnabled] boolValue];
+    [self.pushSwitch addTarget:self action:@selector(onPush) forControlEvents:UIControlEventValueChanged];
+    self.pushSwitch.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:self.pushSwitch];
+
     [NSLayoutConstraint activateConstraints:@[
         [self.infoLabel.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:20],
         [self.infoLabel.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:20],
@@ -90,7 +136,20 @@
         [scan.widthAnchor constraintEqualToConstant:100],
         [save.topAnchor constraintEqualToAnchor:self.serverField.bottomAnchor constant:8],
         [save.leadingAnchor constraintEqualToAnchor:self.infoLabel.leadingAnchor],
-        [out.topAnchor constraintEqualToAnchor:save.bottomAnchor constant:24],
+        [streakCap.topAnchor constraintEqualToAnchor:save.bottomAnchor constant:20],
+        [streakCap.leadingAnchor constraintEqualToAnchor:self.infoLabel.leadingAnchor],
+        [self.streakLabel.topAnchor constraintEqualToAnchor:streakCap.bottomAnchor constant:4],
+        [self.streakLabel.leadingAnchor constraintEqualToAnchor:self.infoLabel.leadingAnchor],
+        [themeCap.topAnchor constraintEqualToAnchor:self.streakLabel.bottomAnchor constant:16],
+        [themeCap.leadingAnchor constraintEqualToAnchor:self.infoLabel.leadingAnchor],
+        [self.themeControl.topAnchor constraintEqualToAnchor:themeCap.bottomAnchor constant:6],
+        [self.themeControl.leadingAnchor constraintEqualToAnchor:self.infoLabel.leadingAnchor],
+        [self.themeControl.trailingAnchor constraintEqualToAnchor:self.infoLabel.trailingAnchor],
+        [pushCap.topAnchor constraintEqualToAnchor:self.themeControl.bottomAnchor constant:16],
+        [pushCap.leadingAnchor constraintEqualToAnchor:self.infoLabel.leadingAnchor],
+        [self.pushSwitch.topAnchor constraintEqualToAnchor:pushCap.bottomAnchor constant:6],
+        [self.pushSwitch.leadingAnchor constraintEqualToAnchor:self.infoLabel.leadingAnchor],
+        [out.topAnchor constraintEqualToAnchor:self.pushSwitch.bottomAnchor constant:24],
         [out.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
     ]];
 
@@ -99,9 +158,41 @@
     [self.view addGestureRecognizer:tap];
 
     [self load];
+    [self loadStreak];
 }
 
 - (void)onTapBackground { [self.view endEditing:YES]; }
+
+- (void)loadStreak {
+    [[LDAPIClient shared] getMomentsWithCompletion:^(NSDictionary *json, NSError *error) {
+        if (error) return;
+        NSDictionary *streak = json[@"streak"];
+        NSInteger n = [streak isKindOfClass:[NSDictionary class]] ? [streak[@"count"] integerValue] : 0;
+        self.streakLabel.text = n > 0 ? [NSString stringWithFormat:@"🔥 %ld day(s)", (long)n] : @"No streak yet — post today!";
+    }];
+}
+
+- (void)onTheme {
+    NSArray *vals = @[@"gold", @"violet", @"ocean"];
+    NSInteger i = self.themeControl.selectedSegmentIndex;
+    if (i >= 0 && i < (NSInteger)vals.count) {
+        [[NSUserDefaults standardUserDefaults] setObject:vals[i] forKey:kLDKeyCameraTheme];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+    }
+}
+
+- (void)onPush {
+    BOOL on = self.pushSwitch.isOn;
+    [[NSUserDefaults standardUserDefaults] setObject:@(on) forKey:kLDKeyPushEnabled];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    if (on) {
+        if ([[UIApplication sharedApplication] respondsToSelector:@selector(registerForRemoteNotifications)]) {
+            [[UIApplication sharedApplication] registerForRemoteNotifications];
+        }
+    } else {
+        [[UIApplication sharedApplication] unregisterForRemoteNotifications];
+    }
+}
 
 - (BOOL)textFieldShouldReturn:(UITextField *)textField {
     [textField resignFirstResponder];

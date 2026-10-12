@@ -1,6 +1,7 @@
 // LDConfig.h — central configuration (iOS 12 compatible, ObjC)
 // Mirrors web .env (VITE_*_API_URL) from Client-Locket-Dio self-hosted/web/.env.example
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -14,11 +15,14 @@ static NSString * const kLDKeyIDToken      = @"LDIDToken";
 static NSString * const kLDKeyRefreshToken = @"LDRefreshToken";
 static NSString * const kLDKeyUserID       = @"LDUserID";
 static NSString * const kLDKeyUserEmail    = @"LDUserEmail";
+static NSString * const kLDKeyPushEnabled  = @"LDPushEnabled";
+static NSString * const kLDKeyCameraTheme  = @"LDCameraTheme"; // gold | violet | ocean
 
 @interface LDConfig : NSObject
 + (NSString *)baseAPIURL;
 + (void)setBaseAPIURL:(NSString *)url;
 + (NSString *)storageAPIURL;
++ (UIColor *)themeAccentColor;
 @end
 
 NS_ASSUME_NONNULL_END

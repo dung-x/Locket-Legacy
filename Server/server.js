@@ -48,6 +48,64 @@ function safeFilename(name) {
   return String(name || '').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 120) || 'file.bin';
 }
 
+// ---- social stores (mirror upstream UX on self-host) ----
+const reactions = {};   // momentId -> { emoji -> count }
+const chatMessages = []; // { id, text, sender, createdAt }
+let msgSeq = 1;
+const pushTokens = [];
+const ymd = (d) => d.toISOString().slice(0, 10);
+
+// Consecutive-day posting streak ending today (or yesterday if none today).
+function computeStreak() {
+  const days = {};
+  moments.forEach(function (m) { if (m.createdAt) days[String(m.createdAt).slice(0, 10)] = 1; });
+  const keys = Object.keys(days).sort().reverse();
+  if (!keys.length) return { count: 0, last_updated_yyyymmdd: null };
+  const today = ymd(new Date());
+  const y = new Date(Date.now() - 86400000);
+  const yesterday = ymd(y);
+  let cursor = keys[0] === today ? today : (keys[0] === yesterday ? yesterday : null);
+  if (!cursor) return { count: 0, last_updated_yyyymmdd: keys[0] };
+  let count = 0;
+  let c = new Date(cursor + 'T00:00:00Z').getTime();
+  const set = {};
+  keys.forEach(function (k) { set[k] = 1; });
+  for (;;) {
+    const k = new Date(c).toISOString().slice(0, 10);
+    if (!set[k]) break;
+    count++;
+    c -= 86400000;
+  }
+  return { count: count, last_updated_yyyymmdd: keys[0] };
+}
+
+function withReactions(list) {
+  return (list || []).map(function (m) {
+    const r = reactions[m.id] || {};
+    const copy = {};
+    Object.keys(m).forEach(function (k) { copy[k] = m[k]; });
+    copy.reactions = r;
+    return copy;
+  });
+}
+
+// Bundled caption-overlay catalog (mirrors upstream overlay themes).
+const OVERLAYS = {
+  decorative: [
+    { overlay_id: 'standard', type: 'default', title: 'Standard', icon: '', text_color: '#FFFFFF', color_top: '', color_bottom: '' },
+    { overlay_id: 'love', type: 'caption_theme', title: 'Love', icon: '❤️', text_color: '#FFFFFF', color_top: '#FF4D6D', color_bottom: '#B5179E' },
+    { overlay_id: 'sunset', type: 'caption_theme', title: 'Sunset', icon: '🌅', text_color: '#FFFFFF', color_top: '#F3722C', color_bottom: '#F94144' },
+    { overlay_id: 'ocean', type: 'caption_theme', title: 'Ocean', icon: '🌊', text_color: '#FFFFFF', color_top: '#277DA1', color_bottom: '#43AA8B' },
+  ],
+  background: [
+    { overlay_id: 'midnight', type: 'background', title: 'Midnight', icon: '', text_color: '#FFD75E', color_top: '#000000', color_bottom: '#333333' },
+    { overlay_id: 'candy', type: 'background', title: 'Candy', icon: '🍬', text_color: '#5A189A', color_top: '#FFC8DD', color_bottom: '#FFAFCC' },
+  ],
+  special: [
+    { overlay_id: 'fire', type: 'special', title: 'On fire', icon: '🔥', text_color: '#FFFFFF', color_top: '#F48C06', color_bottom: '#DC2F02' },
+  ],
+};
+
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -181,6 +239,17 @@ async function route(req, res, url) {
   if (method === 'GET' && pathname === '/connect') {
     const base = String(url.searchParams.get('base') || publicBase(req)).replace(/\/+$/, '');
     sendJSON(res, 200, { apiBaseUrl: base, qrPayload: qrPayload(base), ios: 'Login → 📷 Scan QR → point at the dashboard code' });
+    return;
+  }
+  if (method === 'GET' && pathname === '/api/overlays') {
+    sendJSON(res, 200, { success: true, message: 'ok', data: OVERLAYS });
+    return;
+  }
+  if (method === 'POST' && pathname === '/api/push/register') {
+    let pj = {};
+    try { pj = JSON.parse((await readBody(req)).toString('utf8')) || {}; } catch (e) { pj = {}; }
+    if (pj.token) pushTokens.push({ token: String(pj.token), platform: String(pj.platform || 'ios'), at: new Date().toISOString() });
+    sendJSON(res, 200, { success: true, message: 'registered', data: { devices: pushTokens.length } });
     return;
   }
   if (method === 'GET' && pathname === '/locket/logout') {
@@ -343,16 +412,35 @@ async function route(req, res, url) {
   }
   if (pathname === '/locket/getMomentV2') {
     if (!authed()) return;
-    sendJSON(res, 200, { success: true, message: 'ok', data: moments, nextPageToken: null });
+    sendJSON(res, 200, { success: true, message: 'ok', data: withReactions(moments), nextPageToken: null, streak: computeStreak() });
     return;
   }
   if (pathname === '/locket/getInfoMomentV2') {
     const found = moments.filter(function (x) { return x.id === body.idMoment; });
-    sendJSON(res, 200, { success: true, message: 'ok', data: found, nextPageToken: null });
+    sendJSON(res, 200, { success: true, message: 'ok', data: withReactions(found), nextPageToken: null });
     return;
   }
   if (pathname === '/locket/getAllMessageV2') {
-    sendJSON(res, 200, { success: true, message: 'ok', data: [], nextPageToken: null });
+    sendJSON(res, 200, { success: true, message: 'ok', data: chatMessages, nextPageToken: null });
+    return;
+  }
+  if (pathname === '/locket/sendMessage') {
+    if (!authed()) return;
+    const text = String(body.text || body.msg || '').slice(0, 1000);
+    if (!text) { sendJSON(res, 400, { success: false, message: 'empty message' }); return; }
+    const msg = { id: 'msg' + (msgSeq++), text: text, sender: 'me', createdAt: new Date().toISOString() };
+    chatMessages.push(msg);
+    sendJSON(res, 200, { success: true, message: 'sent', data: msg });
+    return;
+  }
+  if (pathname === '/locket/reactToMoment') {
+    if (!authed()) return;
+    const mid = String(body.momentId || body.moment_uid || '');
+    const emoji = String(body.emoji || body.reaction || '❤️').slice(0, 8);
+    if (!mid) { sendJSON(res, 400, { success: false, message: 'missing momentId' }); return; }
+    reactions[mid] = reactions[mid] || {};
+    reactions[mid][emoji] = (reactions[mid][emoji] || 0) + 1;
+    sendJSON(res, 200, { success: true, message: 'reacted', data: { momentId: mid, reactions: reactions[mid] } });
     return;
   }
   sendJSON(res, 404, { success: false, message: 'not found' });
