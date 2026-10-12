@@ -40,6 +40,17 @@ jobs:
           if missing:
               print('CORRUPT: sources without top-level PBXBuildFile:', missing)
               sys.exit(1)
+          # 3. every file ref (except the .app product) must belong to a group,
+          #    or Xcode resolves its path against the repo root.
+          refs = set(re.findall(r'^\t\t([0-9A-F]{24}) = \{isa = PBXFileReference;', t, re.M))
+          grouped = set()
+          for gm in re.finditer(r'children = \((.*?)\);', t, re.S):
+              grouped.update(x.strip() for x in gm.group(1).split(',') if x.strip())
+          orphans = [r for r in refs if r not in grouped and 'wrapper.application' not in
+                     next((l for l in t.splitlines() if r in l), '')]
+          if orphans:
+              print('CORRUPT: file refs in no group (resolve to repo root):', orphans)
+              sys.exit(1)
           print('pbxproj integrity OK')
           PY
 
