@@ -171,3 +171,6 @@ jobs:
           curl -sf -X POST http://localhost:5001/api/push/register \
             -H 'Content-Type: application/json' -d '{"token":"abc123","platform":"ios"}' \
             | python3 -c "import json,sys; j=json.load(sys.stdin); assert j['success'], j; print('push register OK')"
+          echo "=== refresh + versioned health ==="
+          curl -sf http://localhost:5001/api/health | python3 -c "import json,sys; j=json.load(sys.stdin); assert j['serverVersion'] and 'presignedV3' in j['features'], j; print('health version OK:', j['serverVersion'])"
+          curl -sf -X POST http://localhost:5001/locket/refresh-token -H 'Content-Type: application/json' -d '{"refreshToken":"mock-refresh-abc123"}' | python3 -c "import json,sys; d=json.load(sys.stdin)['data']; assert d['id_token'] and d['access_token'], d; print('refresh shape OK')"

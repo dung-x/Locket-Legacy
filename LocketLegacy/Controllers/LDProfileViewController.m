@@ -8,6 +8,7 @@
 @interface LDProfileViewController () <UITextFieldDelegate>
 @property (nonatomic, strong) UILabel *infoLabel;
 @property (nonatomic, strong) UITextField *serverField;
+@property (nonatomic, strong) UILabel *serverStatus;
 @property (nonatomic, strong) UILabel *streakLabel;
 @property (nonatomic, strong) UISegmentedControl *themeControl;
 @property (nonatomic, strong) UISwitch *pushSwitch;
@@ -60,6 +61,20 @@
     [save addTarget:self action:@selector(onSave) forControlEvents:UIControlEventTouchUpInside];
     save.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:save];
+
+    UIButton *test = [UIButton buttonWithType:UIButtonTypeSystem];
+    [test setTitle:@"Test connection" forState:UIControlStateNormal];
+    [test addTarget:self action:@selector(onTest) forControlEvents:UIControlEventTouchUpInside];
+    test.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:test];
+
+    self.serverStatus = [[UILabel alloc] init];
+    self.serverStatus.text = @"Not tested yet.";
+    self.serverStatus.textColor = [UIColor lightGrayColor];
+    self.serverStatus.font = [UIFont systemFontOfSize:12];
+    self.serverStatus.numberOfLines = 0;
+    self.serverStatus.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:self.serverStatus];
 
     UIButton *scan = [UIButton buttonWithType:UIButtonTypeSystem];
     [scan setTitle:@"📷 Scan QR" forState:UIControlStateNormal];
@@ -136,7 +151,12 @@
         [scan.widthAnchor constraintEqualToConstant:100],
         [save.topAnchor constraintEqualToAnchor:self.serverField.bottomAnchor constant:8],
         [save.leadingAnchor constraintEqualToAnchor:self.infoLabel.leadingAnchor],
-        [streakCap.topAnchor constraintEqualToAnchor:save.bottomAnchor constant:20],
+        [test.topAnchor constraintEqualToAnchor:self.serverField.bottomAnchor constant:8],
+        [test.leadingAnchor constraintEqualToAnchor:save.trailingAnchor constant:16],
+        [self.serverStatus.topAnchor constraintEqualToAnchor:save.bottomAnchor constant:6],
+        [self.serverStatus.leadingAnchor constraintEqualToAnchor:self.infoLabel.leadingAnchor],
+        [self.serverStatus.trailingAnchor constraintEqualToAnchor:self.infoLabel.trailingAnchor],
+        [streakCap.topAnchor constraintEqualToAnchor:self.serverStatus.bottomAnchor constant:16],
         [streakCap.leadingAnchor constraintEqualToAnchor:self.infoLabel.leadingAnchor],
         [self.streakLabel.topAnchor constraintEqualToAnchor:streakCap.bottomAnchor constant:4],
         [self.streakLabel.leadingAnchor constraintEqualToAnchor:self.infoLabel.leadingAnchor],
@@ -227,9 +247,29 @@
 - (void)onSave {
     [self.view endEditing:YES];
     [LDConfig setBaseAPIURL:self.serverField.text];
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Saved" message:[LDConfig baseAPIURL] preferredStyle:UIAlertControllerStyleAlert];
-    [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-    [self presentViewController:a animated:YES completion:nil];
+    [self onTest];
+}
+
+- (void)onTest {
+    [self.view endEditing:YES];
+    NSString *base = [self.serverField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (base.length > 0) [LDConfig setBaseAPIURL:base];
+    self.serverStatus.text = [NSString stringWithFormat:@"Testing %@ …", [LDConfig baseAPIURL]];
+    NSString *u = [[LDConfig baseAPIURL] stringByAppendingString:@"/api/health"];
+    NSURLSessionDataTask *t = [[NSURLSession sharedSession] dataTaskWithURL:[NSURL URLWithString:u] completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (e) { self.serverStatus.text = [NSString stringWithFormat:@"❌ Unreachable: %@", e.localizedDescription]; return; }
+            NSDictionary *json = d.length ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+            if (![json isKindOfClass:[NSDictionary class]]) { self.serverStatus.text = @"❌ Not a LocketLegacy server (bad response)."; return; }
+            NSString *ver = [json[@"serverVersion"] isKindOfClass:[NSString class]] ? json[@"serverVersion"] : @"(old server — pull + rebuild for uploads!)";
+            NSArray *feat = [json[@"features"] isKindOfClass:[NSArray class]] ? json[@"features"] : @[];
+            BOOL canSend = [feat containsObject:@"presignedV3"];
+            self.serverStatus.text = [NSString stringWithFormat:@"%@ %@ • moments: %@ • sending: %@",
+                [@"ok" isEqualToString:json[@"status"]] ? @"✅ Reachable" : @"⚠️ Odd response",
+                ver, json[@"moments"] ?: @"?", canSend ? @"supported ✅" : @"NOT supported ❌ (update server)"];
+        });
+    }];
+    [t resume];
 }
 
 - (void)onLogout {

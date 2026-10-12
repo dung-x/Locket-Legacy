@@ -464,7 +464,20 @@
             }]];
             [self presentViewController:a animated:YES completion:nil];
         } else {
-            NSString *msg = json[@"message"];
+            // Surface the server's own reason (code + message), not just "failed".
+            NSString *msg = nil;
+            id m = json[@"message"];
+            if ([m isKindOfClass:[NSString class]] && ((NSString *)m).length) msg = m;
+            id errObj = json[@"error"];
+            if ([errObj isKindOfClass:[NSDictionary class]]) {
+                NSString *code = errObj[@"code"];
+                NSString *em = errObj[@"message"];
+                if ([code isKindOfClass:[NSString class]] && [em isKindOfClass:[NSString class]]) {
+                    msg = [NSString stringWithFormat:@"%@: %@", code, em];
+                } else if ([em isKindOfClass:[NSString class]] && em.length) {
+                    msg = em;
+                }
+            }
             if (![msg isKindOfClass:[NSString class]] || !msg.length) msg = @"Upload failed.";
             self.statusLabel.text = msg;
         }

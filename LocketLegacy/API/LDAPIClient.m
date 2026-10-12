@@ -3,6 +3,7 @@
 
 @interface LDAPIClient ()
 - (void)POST:(NSString *)path body:(nullable NSDictionary *)body retried:(BOOL)retried completion:(LDJSONCompletion)completion;
+- (void)POSTRaw:(NSString *)path body:(nullable NSDictionary *)body completion:(LDJSONCompletion)completion;
 - (void)POSTURL:(NSString *)urlStr body:(NSDictionary *)body completion:(void(^)(NSDictionary * _Nullable json, NSInteger status, NSError * _Nullable error))completion;
 - (void)POSTURL:(NSString *)urlStr body:(NSDictionary *)body retried:(BOOL)retried completion:(void(^)(NSDictionary * _Nullable json, NSInteger status, NSError * _Nullable error))completion;
 - (BOOL)needsRefreshForJSON:(NSDictionary *)json status:(NSInteger)code;
@@ -31,6 +32,32 @@
 
 - (void)POST:(NSString *)path body:(nullable NSDictionary *)body completion:(LDJSONCompletion)completion {
     [self POST:path body:body retried:NO completion:completion];
+}
+
+// Raw POST with NO refresh logic — used by the refresh call itself so an
+// expired refresh token can never recurse forever (that hang looked exactly
+// like "moment still didn't get uploaded").
+- (void)POSTRaw:(NSString *)path body:(nullable NSDictionary *)body completion:(LDJSONCompletion)completion {
+    NSString *urlStr = [[self baseURL] stringByAppendingString:path];
+    NSURL *url = [NSURL URLWithString:urlStr];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+    req.HTTPMethod = @"POST";
+    [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    if (self.idToken.length > 0) {
+        [req setValue:[NSString stringWithFormat:@"Bearer %@", self.idToken] forHTTPHeaderField:@"Authorization"];
+    }
+    if (body) {
+        req.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
+    }
+    NSURLSessionDataTask *t = [[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+        if (e) { dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, e); }); return; }
+        NSDictionary *json = nil;
+        if (d.length) json = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
+        if (!json) json = @{};
+        NSDictionary *j = json;
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(j, nil); });
+    }];
+    [t resume];
 }
 
 - (void)POST:(NSString *)path body:(nullable NSDictionary *)body retried:(BOOL)retried completion:(LDJSONCompletion)completion {
@@ -121,7 +148,7 @@
 }
 
 - (void)refreshToken:(NSString *)refreshToken completion:(LDJSONCompletion)completion {
-    [self POST:@"/refresh-token" body:@{@"refreshToken": refreshToken ?: @""} completion:completion];
+    [self POSTRaw:@"/refresh-token" body:@{@"refreshToken": refreshToken ?: @""} completion:completion];
 }
 
 - (void)logoutWithCompletion:(LDJSONCompletion)completion {

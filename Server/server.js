@@ -233,7 +233,7 @@ async function route(req, res, url) {
     return;
   }
   if (method === 'GET' && pathname === '/api/health') {
-    sendJSON(res, 200, { status: 'ok', service: 'locketlegacy-mock', moments: moments.length, time: new Date().toISOString() });
+    sendJSON(res, 200, { status: 'ok', service: 'locketlegacy-mock', serverVersion: '1.1.0+presigned', moments: moments.length, features: ['presignedV3', 'overlays', 'reactions', 'chat', 'push', 'streak'], time: new Date().toISOString() });
     return;
   }
   if (method === 'GET' && pathname === '/connect') {
