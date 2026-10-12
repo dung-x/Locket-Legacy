@@ -5,7 +5,7 @@
 #import "LDLoginViewController.h"
 #import "LDQRScannerViewController.h"
 
-@interface LDProfileViewController ()
+@interface LDProfileViewController () <UITextFieldDelegate>
 @property (nonatomic, strong) UILabel *infoLabel;
 @property (nonatomic, strong) UITextField *serverField;
 @end
@@ -47,6 +47,8 @@
     self.serverField.leftView = [[UIView alloc] initWithFrame:CGRectMake(0,0,12,1)];
     self.serverField.leftViewMode = UITextFieldViewModeAlways;
     self.serverField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    self.serverField.delegate = self;
+    self.serverField.returnKeyType = UIReturnKeyDone;
     self.serverField.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:self.serverField];
 
@@ -92,7 +94,18 @@
         [out.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
     ]];
 
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onTapBackground)];
+    tap.cancelsTouchesInView = NO;
+    [self.view addGestureRecognizer:tap];
+
     [self load];
+}
+
+- (void)onTapBackground { [self.view endEditing:YES]; }
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    [textField resignFirstResponder];
+    return YES;
 }
 
 - (void)load {

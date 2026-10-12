@@ -1,6 +1,17 @@
 #import "LDMoment.h"
+#import "../Config.h"
 @implementation LDMoment
 + (NSString *)str:(id)v { return [v isKindOfClass:[NSString class]] ? v : @""; }
++ (NSString *)absURL:(NSString *)url {
+    // Older/self-hosted backends may return a bare "/uploads/…" path, which
+    // NSURL cannot resolve on its own — prefix the configured API host.
+    if (url.length > 0 && [url hasPrefix:@"/"]) {
+        NSString *base = [LDConfig baseAPIURL];
+        while (base.length > 1 && [base hasSuffix:@"/"]) base = [base substringToIndex:base.length - 1];
+        return [base stringByAppendingString:url];
+    }
+    return url;
+}
 + (instancetype)fromJSON:(NSDictionary *)json {
     LDMoment *m = [[LDMoment alloc] init];
     m.momentId = [self str:json[@"id"]].length ? [self str:json[@"id"]] : [self str:json[@"moment_id"]];
@@ -9,6 +20,7 @@
     if (!url.length) url = [self str:json[@"url"]];
     if (!url.length && [json[@"mediaInfo"] isKindOfClass:[NSDictionary class]]) url = [self str:json[@"mediaInfo"][@"url"]];
     if (!url.length && [json[@"media"] isKindOfClass:[NSDictionary class]]) url = [self str:json[@"media"][@"url"]];
+    url = [self absURL:url];
     m.imageURL = url; m.videoURL = @"";
     NSString *ct = [self str:json[@"contentType"]];
     if (!ct.length && [json[@"mediaInfo"] isKindOfClass:[NSDictionary class]]) ct = [self str:json[@"mediaInfo"][@"contentType"]];

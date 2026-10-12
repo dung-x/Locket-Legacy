@@ -241,7 +241,9 @@ async function route(req, res, url) {
     try { caption = JSON.parse(body.optionsData || '{}').caption || ''; }
     catch (e) { caption = body.optionsData || ''; }
     let murl = '';
-    if (files.length > 0) murl = '/uploads/' + path.basename(files[0].path);
+    // Absolute URL: the phone's feed can load it directly (a bare "/uploads/…"
+    // path is unresolvable from the app). publicBase reflects the caller's host.
+    if (files.length > 0) murl = publicBase(req) + '/uploads/' + path.basename(files[0].path);
     const m = { id: 'm' + (seq++), url: murl, caption: caption, author: 'Legacy User', createdAt: new Date().toISOString() };
     moments.unshift(m);
     sendJSON(res, 200, { success: true, message: 'Upload media successfully', data: m });

@@ -38,3 +38,46 @@ jobs:
         run: node --check Server/server.js
       - name: Build mock API image
         run: docker build -t locketlegacy-api ./Server
+
+  server-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Smoke test mock API (login → upload picture → moments → dashboard)
+        run: |
+          set -e
+          cd Server
+          node server.js > /tmp/srv.log 2>&1 &
+          SRV=$!
+          trap "kill $SRV" EXIT
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:5001/api/health && break
+            sleep 1
+          done
+          curl -sf http://localhost:5001/api/health
+          curl -sf http://localhost:5001/connect | grep -o 'locketlegacy://connect'
+          curl -sf http://localhost:5001/ | grep -o 'Regenerate QR'
+          TOK=$(curl -s -X POST http://localhost:5001/locket/login \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"ci@test.co","password":"x"}' | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['idToken'])")
+          echo "token=$TOK"
+          printf '\xff\xd8\xff\xe0fake-jpeg-bytes\xff\xd9' > pic.jpg
+          curl -sf -X POST http://localhost:5001/locket/postMomentV1 \
+            -H "Authorization: Bearer $TOK" \
+            -F 'optionsData={"caption":"ci pic"}' \
+            -F 'file=@pic.jpg;type=image/jpeg' | tee /tmp/up.json
+          python3 - <<'PY'
+          import json
+          up = json.load(open('/tmp/up.json'))
+          assert up['success'] is True, up
+          url = up['data']['url']
+          assert url.startswith('http://'), url  # absolute, phone-loadable
+          assert up['data']['caption'] == 'ci pic', up
+          print('upload OK:', url)
+          PY
+          URL=$(python3 -c "import json; print(json.load(open('/tmp/up.json'))['data']['url'])")
+          curl -sf "$URL" -o /tmp/dl.jpg
+          cmp pic.jpg /tmp/dl.jpg && echo "roundtrip bytes identical"
+          curl -s -X POST http://localhost:5001/locket/getMomentV2 \
+            -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' -d '{}' \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['success'] and len(d['data'])==1 and d['data'][0]['caption']=='ci pic', d; print('moments OK')"

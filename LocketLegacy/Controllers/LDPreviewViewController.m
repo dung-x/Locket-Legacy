@@ -3,7 +3,7 @@
 #import "../API/LDAPIClient.h"
 #import <AVFoundation/AVFoundation.h>
 
-@interface LDPreviewViewController ()
+@interface LDPreviewViewController () <UITextFieldDelegate>
 @property (nonatomic, strong, nullable) UIImage *image;
 @property (nonatomic, strong, nullable) NSURL *videoURL;
 @property (nonatomic, strong) UIImageView *imageView;
@@ -44,14 +44,22 @@
     }
 
     self.captionField = [[UITextField alloc] init];
-    self.captionField.placeholder = @"Add a caption…";
+    self.captionField.placeholder = @"Add a caption… (tap Done or outside to close keyboard)";
     self.captionField.textColor = [UIColor whiteColor];
     self.captionField.backgroundColor = [UIColor colorWithWhite:0.15 alpha:1];
     self.captionField.layer.cornerRadius = 10;
     self.captionField.leftView = [[UIView alloc] initWithFrame:CGRectMake(0,0,12,1)];
     self.captionField.leftViewMode = UITextFieldViewModeAlways;
+    self.captionField.delegate = self;
+    self.captionField.returnKeyType = UIReturnKeyDone;
+    self.captionField.inputAccessoryView = [self keyboardToolbar];
     self.captionField.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:self.captionField];
+
+    // Tap anywhere outside the field to dismiss the keyboard.
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onTapBackground)];
+    tap.cancelsTouchesInView = NO;
+    [self.view addGestureRecognizer:tap];
 
     self.audience = [[UISegmentedControl alloc] initWithItems:@[@"All friends", @"Selected"]];
     self.audience.selectedSegmentIndex = 0;
@@ -101,6 +109,25 @@
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     self.playerLayer.frame = self.imageView.bounds;
+}
+
+#pragma mark - Keyboard dismissal (Done key, toolbar, tap outside)
+
+- (UIToolbar *)keyboardToolbar {
+    UIToolbar *bar = [[UIToolbar alloc] init];
+    [bar sizeToFit];
+    UIBarButtonItem *flex = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+    UIBarButtonItem *done = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(onKeyboardDone)];
+    bar.items = @[flex, done];
+    return bar;
+}
+
+- (void)onKeyboardDone { [self.captionField resignFirstResponder]; }
+- (void)onTapBackground { [self.view endEditing:YES]; }
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    [textField resignFirstResponder];
+    return YES;
 }
 
 - (NSURL *)stagedFileURL:(BOOL)isVideo {

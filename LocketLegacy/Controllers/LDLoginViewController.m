@@ -4,7 +4,7 @@
 #import "LDQRScannerViewController.h"
 #import "../Config.h"
 
-@interface LDLoginViewController ()
+@interface LDLoginViewController () <UITextFieldDelegate>
 @property (nonatomic, strong) UITextField *emailField;
 @property (nonatomic, strong) UITextField *passwordField;
 @property (nonatomic, strong) UITextField *serverField;
@@ -113,6 +113,17 @@
     self.spinner.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:self.spinner];
 
+    // Keyboard: Done/Next navigation + tap-outside dismissal.
+    self.serverField.delegate = self;
+    self.serverField.returnKeyType = UIReturnKeyNext;
+    self.emailField.delegate = self;
+    self.emailField.returnKeyType = UIReturnKeyNext;
+    self.passwordField.delegate = self;
+    self.passwordField.returnKeyType = UIReturnKeyDone;
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onTapBackground)];
+    tap.cancelsTouchesInView = NO;
+    [self.view addGestureRecognizer:tap];
+
     UIView *sv = self.serverField;
     [NSLayoutConstraint activateConstraints:@[
         [title.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:40],
@@ -170,6 +181,16 @@
     [super viewWillAppear:animated];
     // Refresh in case the QR scanner changed it while we were away.
     if (self.serverField) self.serverField.text = [LDConfig baseAPIURL];
+}
+
+- (void)onTapBackground { [self.view endEditing:YES]; }
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    if (textField == self.serverField) { [self.emailField becomeFirstResponder]; return NO; }
+    if (textField == self.emailField) { [self.passwordField becomeFirstResponder]; return NO; }
+    [textField resignFirstResponder];
+    if (textField == self.passwordField) [self onLogin];
+    return YES;
 }
 
 - (void)onScan {
