@@ -238,11 +238,34 @@
     [self.navigationController pushViewController:pv animated:YES];
 }
 
+- (UIImage *)normalizedImage:(UIImage *)img {
+    // CGImage pixel buffers are stored unrotated; img.size is the ORIENTED size.
+    // Cropping the raw buffer with oriented coords picks the wrong region and
+    // re-attaching the orientation flag double-rotates. Render through the
+    // orientation first so downstream math is in plain Up pixels.
+    if (!img || img.imageOrientation == UIImageOrientationUp) return img;
+    UIGraphicsBeginImageContextWithOptions(img.size, NO, img.scale);
+    [img drawInRect:CGRectMake(0, 0, img.size.width, img.size.height)];
+    UIImage *out = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return out ?: img;
+}
+
 - (UIImage *)squareCrop:(UIImage *)img {
-    CGFloat side = MIN(img.size.width, img.size.height);
-    CGRect r = CGRectMake((img.size.width - side)/2, (img.size.height - side)/2, side, side);
-    CGImageRef cg = CGImageCreateWithImageInRect(img.CGImage, CGRectMake(r.origin.x*img.scale, r.origin.y*img.scale, r.size.width*img.scale, r.size.height*img.scale));
-    UIImage *out = [UIImage imageWithCGImage:cg scale:img.scale orientation:img.imageOrientation];
+    UIImage *norm = [self normalizedImage:img];
+    if (!norm.CGImage) return img;
+    CGFloat scale = norm.scale;
+    CGFloat side = MIN(norm.size.width, norm.size.height);
+    CGRect r = CGRectMake((norm.size.width - side) / 2.0, (norm.size.height - side) / 2.0, side, side);
+    CGRect px = CGRectMake(r.origin.x * scale, r.origin.y * scale, side * scale, side * scale);
+    // Clamp to the buffer — fractional rounding must never escape it.
+    CGFloat w = (CGFloat)CGImageGetWidth(norm.CGImage);
+    CGFloat h = (CGFloat)CGImageGetHeight(norm.CGImage);
+    px = CGRectIntersection(px, CGRectMake(0, 0, w, h));
+    if (CGRectIsNull(px) || px.size.width < 1 || px.size.height < 1) return norm;
+    CGImageRef cg = CGImageCreateWithImageInRect(norm.CGImage, px);
+    if (!cg) return norm;
+    UIImage *out = [UIImage imageWithCGImage:cg scale:scale orientation:UIImageOrientationUp];
     CGImageRelease(cg);
     return out;
 }
