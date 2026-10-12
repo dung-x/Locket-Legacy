@@ -24,7 +24,9 @@ jobs:
           # 1. every object entry must live on exactly one balanced line
           #    (a split entry means nested garbage Xcode silently drops).
           body = t.split('objects = {', 1)[1].rsplit('rootObject', 1)[0]
-          bad = [l for l in body.splitlines() if l.strip() and l.count('{') != l.count('}')]
+          bad = [l for l in body.splitlines()
+                 if l.strip() and l.strip() not in ('{', '}', '};')
+                 and l.count('{') != l.count('}')]
           if bad:
               print('CORRUPT pbxproj lines (unbalanced braces):')
               [print('  ' + l.strip()[:160]) for l in bad]
