@@ -1,0 +1,71 @@
+name: iOS IPA (unsigned) + Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v1.0.0)"
+        required: true
+        default: "v1.0.0"
+
+permissions:
+  contents: write
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Archive (iphoneos, no signing)
+        run: |
+          set -eux
+          rm -rf build Payload *.ipa
+          mkdir -p build
+          xcodebuild \
+            -project LocketLegacy.xcodeproj \
+            -scheme LocketLegacy \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "$PWD/build/LocketLegacy.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            archive
+          echo "=== xcarchive contents ==="
+          find build/LocketLegacy.xcarchive -maxdepth 4 | head -n 40
+          APP_PATH=$(find build/LocketLegacy.xcarchive/Products/Applications -name "*.app" -maxdepth 2 | head -n 1)
+          echo "APP_PATH=$APP_PATH"
+          test -d "$APP_PATH"
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          zip -r LocketLegacy-unsigned.ipa Payload
+          ls -lh *.ipa
+          # metadata for release notes
+          MAIN_BIN=$(basename "$APP_PATH" .app)
+          otool -l "Payload/$MAIN_BIN.app/$MAIN_BIN" 2>/dev/null | grep -A2 LC_BUILD_VERSION | head -n 10 || true
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocketLegacy-unsigned-ipa
+          path: LocketLegacy-unsigned.ipa
+          if-no-files-found: error
+
+      - name: Create GitHub Release with IPA
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: LocketLegacy ${{ inputs.tag }} (unsigned IPA)
+          body: |
+            Unsigned IPA built from `main` (Objective-C, iOS 12+).
+
+            - File: `LocketLegacy-unsigned.ipa` (no code signature — for inspection/sideloading via AltStore/Sideloadly; will NOT install as-is on stock devices without re-signing).
+            - For an installable signed IPA, add Apple Developer signing secrets and use ExportOptionsPlist with your provisioning profile.
+            - Backend mock: `docker compose up -d --build` (API on :5001), then set API URL on the Login screen.
+          files: LocketLegacy-unsigned.ipa
+          fail_on_unmatched_files: true
