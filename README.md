@@ -7,13 +7,22 @@ Same product idea, same screens, rewritten in **Objective-C + UIKit**, **minimum
 
 | Web (`apps/self-hosted/web/src`) | iOS |
 |---|---|
-| `pages/Public/Login` | `LDLoginViewController` — email+password, editable API base URL |
+| `pages/Public/Login` | `LDLoginViewController` — labeled rows ① API server / ② email / ③ password, 📷 Scan QR button |
 | `pages/LocketCameraBeta/MainHomeScreen` (live feed, flip, flash) | `LDCameraViewController` — AVFoundation live preview, front/back, flash, photo shutter, video REC, library pick |
 | `components/common/CropImageStudio` | Square crop in camera + preview |
 | Preview / caption / overlay | `LDPreviewViewController` — caption field, audience segment, `postMomentV1` multipart upload |
 | Moment history (`getMomentV2`) | `LDFeedViewController` — 3-col grid (`LDMomentCell`) |
 | Friends (`getAllFriendsV2`) | `LDFriendsViewController` |
-| Profile (`getInfoUser`) | `LDProfileViewController` — user info, server setting, logout |
+| Profile (`getInfoUser`) | `LDProfileViewController` — user info, labeled server row + Scan QR, logout |
+| Server QR connect | `LDQRScannerViewController` — AVFoundation QR scan, accepts `locketlegacy://connect?api=…`, raw URL, or JSON |
+
+## Connect via QR (phone ↔ Docker)
+
+1. `docker compose up -d --build`, then open the dashboard on your computer: `http://<lan-ip>:5001/`
+   (use the machine's LAN IP, not localhost — the phone must reach it).
+2. Dashboard section ① shows a QR encoding `locketlegacy://connect?api=http://<lan-ip>:5001`.
+3. In the app: Login (or Profile) → **📷 Scan QR** → point at the code. The ① row fills in.
+4. Machine-readable too: `GET /connect` → `{ apiBaseUrl, qrPayload }`, `GET /api/health`.
 
 ## API mapping (upstream `apps/self-hosted/api`)
 
@@ -37,10 +46,11 @@ LocketLegacy/
   Config.h/m                   base URL store
   API/LDAPIClient.h/m
   Models/LDUser, LDMoment, LDFriend
-  Controllers/ Login, MainTab, Camera, Preview, Feed, Friends, Profile
+  Controllers/ Login, MainTab, Camera, Preview, Feed, Friends, Profile, QRScanner
   Views/ LDMomentCell, LDFriendCell
+  Assets.xcassets/AppIcon.appiconset  gold-on-black camera glyph (all sizes + 1024)
   Info.plist, LaunchScreen.storyboard
-Server/                        self-host mock (Express) implementing /locket/* for dev
+Server/                        self-host mock (Express) implementing /locket/* + dashboard UI at / for dev
 docker-compose.yml             `docker compose up -d --build` → API on :5001
 .github/workflows/ios-build.yml  macOS build + docker build
 ```
@@ -60,7 +70,8 @@ with the same routes:
 
 ```bash
 docker compose up -d --build
-curl http://localhost:5001/
+open http://localhost:5001/        # dashboard: connect QR + login/data/upload testers
+curl http://localhost:5001/api/health
 # login test:
 curl -X POST http://localhost:5001/locket/login \
   -H 'Content-Type: application/json' \

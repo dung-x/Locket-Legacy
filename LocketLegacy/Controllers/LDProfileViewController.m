@@ -3,6 +3,7 @@
 #import "../Models/LDUser.h"
 #import "../Config.h"
 #import "LDLoginViewController.h"
+#import "LDQRScannerViewController.h"
 
 @interface LDProfileViewController ()
 @property (nonatomic, strong) UILabel *infoLabel;
@@ -24,13 +25,21 @@
     [self.view addSubview:self.infoLabel];
 
     UILabel *srvTitle = [[UILabel alloc] init];
-    srvTitle.text = @"API server (self-host)";
-    srvTitle.textColor = [UIColor lightGrayColor];
-    srvTitle.font = [UIFont systemFontOfSize:13];
+    srvTitle.text = @"① API SERVER — self-host Docker address";
+    srvTitle.textColor = [UIColor colorWithWhite:0.65 alpha:1];
+    srvTitle.font = [UIFont boldSystemFontOfSize:12];
     srvTitle.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:srvTitle];
 
+    UILabel *srvHint = [[UILabel alloc] init];
+    srvHint.text = @"Same as login row ① — e.g. http://192.168.1.5:5001, or Scan QR.";
+    srvHint.textColor = [UIColor colorWithWhite:0.5 alpha:1];
+    srvHint.font = [UIFont systemFontOfSize:11];
+    srvHint.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:srvHint];
+
     self.serverField = [[UITextField alloc] init];
+    self.serverField.placeholder = @"http://<host>:5001";
     self.serverField.text = [LDConfig baseAPIURL];
     self.serverField.textColor = [UIColor whiteColor];
     self.serverField.backgroundColor = [UIColor colorWithWhite:0.15 alpha:1];
@@ -47,6 +56,12 @@
     save.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:save];
 
+    UIButton *scan = [UIButton buttonWithType:UIButtonTypeSystem];
+    [scan setTitle:@"📷 Scan QR" forState:UIControlStateNormal];
+    [scan addTarget:self action:@selector(onScan) forControlEvents:UIControlEventTouchUpInside];
+    scan.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:scan];
+
     UIButton *out = [UIButton buttonWithType:UIButtonTypeSystem];
     [out setTitle:@"Log Out" forState:UIControlStateNormal];
     [out setTitleColor:[UIColor redColor] forState:UIControlStateNormal];
@@ -60,10 +75,17 @@
         [self.infoLabel.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-20],
         [srvTitle.topAnchor constraintEqualToAnchor:self.infoLabel.bottomAnchor constant:24],
         [srvTitle.leadingAnchor constraintEqualToAnchor:self.infoLabel.leadingAnchor],
-        [self.serverField.topAnchor constraintEqualToAnchor:srvTitle.bottomAnchor constant:8],
+        [srvTitle.trailingAnchor constraintEqualToAnchor:self.infoLabel.trailingAnchor],
+        [srvHint.topAnchor constraintEqualToAnchor:srvTitle.bottomAnchor constant:2],
+        [srvHint.leadingAnchor constraintEqualToAnchor:self.infoLabel.leadingAnchor],
+        [srvHint.trailingAnchor constraintEqualToAnchor:self.infoLabel.trailingAnchor],
+        [self.serverField.topAnchor constraintEqualToAnchor:srvHint.bottomAnchor constant:8],
         [self.serverField.leadingAnchor constraintEqualToAnchor:self.infoLabel.leadingAnchor],
-        [self.serverField.trailingAnchor constraintEqualToAnchor:self.infoLabel.trailingAnchor],
+        [self.serverField.trailingAnchor constraintEqualToAnchor:scan.leadingAnchor constant:-8],
         [self.serverField.heightAnchor constraintEqualToConstant:46],
+        [scan.trailingAnchor constraintEqualToAnchor:self.infoLabel.trailingAnchor],
+        [scan.centerYAnchor constraintEqualToAnchor:self.serverField.centerYAnchor],
+        [scan.widthAnchor constraintEqualToConstant:100],
         [save.topAnchor constraintEqualToAnchor:self.serverField.bottomAnchor constant:8],
         [save.leadingAnchor constraintEqualToAnchor:self.infoLabel.leadingAnchor],
         [out.topAnchor constraintEqualToAnchor:save.bottomAnchor constant:24],
@@ -84,6 +106,18 @@
             u.displayName.length ? u.displayName : @"(no name)",
             u.email, u.uid, u.username];
     }];
+}
+
+- (void)onScan {
+    [self.view endEditing:YES];
+    LDQRScannerViewController *vc = [[LDQRScannerViewController alloc] initWithCompletion:^(NSString *value) {
+        if (value.length > 0) {
+            self.serverField.text = value;
+            [LDConfig setBaseAPIURL:value];
+            [self load];
+        }
+    }];
+    [self.navigationController pushViewController:vc animated:YES];
 }
 
 - (void)onSave {
