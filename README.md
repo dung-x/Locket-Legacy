@@ -50,7 +50,7 @@ LocketLegacy/
   Views/ LDMomentCell, LDFriendCell
   Assets.xcassets/AppIcon.appiconset  gold-on-black camera glyph (all sizes + 1024)
   Info.plist, LaunchScreen.storyboard
-Server/                        self-host mock (Express) implementing /locket/* + dashboard UI at / for dev
+Server/                        self-host mock (ZERO npm deps — node builtins only) implementing /locket/* + dashboard UI at / for dev
 docker-compose.yml             `docker compose up -d --build` → API on :5001
 .github/workflows/ios-build.yml  macOS build + docker build
 ```
@@ -76,6 +76,16 @@ curl http://localhost:5001/api/health
 curl -X POST http://localhost:5001/locket/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"demo@locket.legacy","password":"x"}'
+```
+
+No `npm install` runs during `docker build` (server uses node builtins only), so a
+blocked/unreachable npm registry will not break the build. If `docker build` still
+fails pulling `node:20-slim` with DNS errors (`EAI_AGAIN`), fix the host's Docker DNS:
+
+```bash
+docker run --rm alpine nslookup registry-1.docker.io   # should resolve
+# if not: echo '{"dns":["8.8.8.8","1.1.1.1"]}' | sudo tee /etc/docker/daemon.json
+sudo systemctl restart docker
 ```
 
 To use the real upstream backend instead:

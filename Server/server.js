@@ -1,150 +1,293 @@
-// LocketLegacy self-host mock + web dashboard.
+// LocketLegacy self-host mock + web dashboard — ZERO dependencies (node builtins only).
+// No `npm install` needed, so `docker build` works even when the npm registry
+// is unreachable (e.g. DNS EAI_AGAIN on restricted hosts).
+//
 // API: POST /locket/login, POST /locket/refresh-token, GET /locket/logout,
 // POST /locket/getInfoUser, POST /locket/getAllFriendsV2,
 // POST /locket/postMomentV1 (multipart), POST /locket/postMomentV2 (json),
 // POST /locket/getMomentV2, POST /locket/getInfoMomentV2, POST /locket/getAllMessageV2
 // Dashboard: GET / (human UI with connect QR), GET /api/health, GET /connect
-// Data is in-memory + ./uploads on disk. Configure via .env / env vars.
-const express = require('express');
-const cors = require('cors');
-const multer = require('multer');
+// Data is in-memory + ./uploads on disk. Configure via env vars.
+const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const PORT = process.env.PORT || 5001;
+const PORT = parseInt(process.env.PORT || '5001', 10);
 const PUBLIC_API_URL = process.env.PUBLIC_API_URL || ''; // e.g. http://192.168.1.5:5001
-const app = express();
-app.use(cors());
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+const MAX_BODY = 25 * 1024 * 1024;
 
 const UP = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UP)) fs.mkdirSync(UP, { recursive: true });
-app.use('/uploads', express.static(UP));
-
-const upload = multer({ dest: path.join(UP, 'tmp'), limits: { fileSize: 20 * 1024 * 1024 } });
 
 let moments = [];
 let seq = 1;
 
-function ok(res, data, extra = {}) {
-  return res.json(Object.assign({ success: true, message: 'ok', data }, extra));
+function cors(res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
+
+function sendJSON(res, status, obj) {
+  const body = JSON.stringify(obj);
+  cors(res);
+  res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
+  res.end(body);
+}
+
+function ok(res, data, extra) {
+  sendJSON(res, 200, Object.assign({ success: true, message: 'ok', data: data }, extra || {}));
+}
+
 function authOk(req) {
-  const h = req.headers.authorization || '';
-  return h.startsWith('Bearer ') && h.length > 10;
+  const h = req.headers['authorization'] || '';
+  return h.indexOf('Bearer ') === 0 && h.length > 10;
 }
+
 // Base URL as the caller's browser sees it (right for LAN QR), unless overridden.
 function publicBase(req) {
   if (PUBLIC_API_URL) return PUBLIC_API_URL.replace(/\/+$/, '');
-  const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0];
-  const host = req.get('host');
-  return `${proto}://${host}`;
+  const fwd = req.headers['x-forwarded-proto'];
+  const proto = (Array.isArray(fwd) ? fwd[0] : (fwd || 'http')).split(',')[0].trim() || 'http';
+  const host = req.headers['host'] || ('localhost:' + PORT);
+  return proto + '://' + host;
 }
+
 function qrPayload(base) {
-  return `locketlegacy://connect?api=${encodeURIComponent(base)}`;
+  return 'locketlegacy://connect?api=' + encodeURIComponent(base);
 }
 
-// ---------- dashboard / health ----------
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', service: 'locketlegacy-mock', moments: moments.length, time: new Date().toISOString() });
-});
-
-app.get('/connect', (req, res) => {
-  const base = (req.query.base || publicBase(req)).replace(/\/+$/, '');
-  res.json({ apiBaseUrl: base, qrPayload: qrPayload(base), ios: 'Login → 📷 Scan QR → point at the dashboard code' });
-});
-
-app.get('/', (req, res) => {
-  const base = publicBase(req);
-  res.type('html').send(DASHBOARD_HTML.replaceAll('__BASE__', base).replaceAll('__QR__', qrPayload(base)));
-});
-
-// ---------- API ----------
-app.get('/locket/logout', (req, res) => res.json({ success: true, message: 'ok' }));
-
-app.post('/locket/login', (req, res) => {
-  const { email } = req.body || {};
-  if (!email) return res.status(400).json({ success: false, message: 'email required' });
-  return ok(res, {
-    kind: 'identitytoolkit#VerifyPasswordResponse',
-    localId: 'mock-uid-1',
-    email,
-    displayName: 'Legacy User',
-    idToken: 'mock-id-token-abc123',
-    refreshToken: 'mock-refresh-abc123',
-    expiresIn: '3600',
+function readBody(req) {
+  return new Promise(function (resolve, reject) {
+    const chunks = [];
+    let size = 0;
+    req.on('data', function (c) {
+      size += c.length;
+      if (size > MAX_BODY) {
+        reject(new Error('body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', function () { resolve(Buffer.concat(chunks)); });
+    req.on('error', reject);
   });
-});
+}
 
-app.post('/locket/refresh-token', (req, res) => {
-  return ok(res, {
-    access_token: 'mock-id-token-abc123',
-    id_token: 'mock-id-token-abc123',
-    refresh_token: 'mock-refresh-abc123',
-    expires_in: '3600',
-    token_type: 'Bearer',
-    user_id: 'mock-uid-1',
-  });
-});
-
-app.post('/locket/getInfoUser', (req, res) => {
-  if (!authOk(req)) return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'missing token' } });
-  return ok(res, {
-    uid: 'mock-uid-1', localId: 'mock-uid-1', email: 'demo@locket.legacy',
-    displayName: 'Legacy User', username: 'legacy', firstName: 'Legacy', lastName: 'User',
-    profilePicture: '', createdAt: new Date().toISOString(),
-  });
-});
-
-app.post('/locket/getAllFriendsV2', (req, res) => {
-  if (!authOk(req)) return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'missing token' } });
-  return ok(res, [
-    { uid: 'friend-1', displayName: 'Dio', profilePicture: '' },
-    { uid: 'friend-2', displayName: 'Locket Fan', profilePicture: '' },
-  ]);
-});
-
-app.post('/locket/postMomentV1', upload.single('file'), (req, res) => {
-  if (!authOk(req)) return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'missing token' } });
-  let caption = '';
-  try { caption = JSON.parse(req.body.optionsData || '{}').caption || ''; } catch (e) { caption = req.body.optionsData || ''; }
-  let url = '';
-  if (req.file) {
-    const ext = path.extname(req.file.originalname || '.jpg') || '.jpg';
-    const name = `m${Date.now()}${ext}`;
-    fs.renameSync(req.file.path, path.join(UP, name));
-    url = `/uploads/${name}`;
+// Minimal binary-safe multipart parser (single file field is all we need).
+function parseMultipart(buf, boundary) {
+  const fields = {};
+  const files = [];
+  const sep = Buffer.from('--' + boundary, 'latin1');
+  const crlfSep = Buffer.from('\r\n--' + boundary, 'latin1');
+  let pos = buf.indexOf(sep);
+  if (pos === -1) return { fields: fields, files: files };
+  pos += sep.length;
+  for (;;) {
+    if (buf[pos] === 0x2d && buf[pos + 1] === 0x2d) break; // closing '--'
+    if (buf[pos] === 0x0d && buf[pos + 1] === 0x0a) pos += 2; // CRLF after delimiter
+    const hEnd = buf.indexOf('\r\n\r\n', pos);
+    if (hEnd === -1) break;
+    const head = buf.slice(pos, hEnd).toString('latin1');
+    const cStart = hEnd + 4;
+    let cEnd = buf.indexOf(crlfSep, cStart);
+    let last = false;
+    if (cEnd === -1) { cEnd = buf.length; last = true; }
+    const content = buf.slice(cStart, cEnd);
+    const disp = /name="([^"]*)"/.exec(head);
+    const fn = /filename="([^"]*)"/.exec(head);
+    const name = disp && disp[1];
+    if (name) {
+      if (fn && fn[1]) {
+        const originalname = fn[1].split(/[\\/]/).pop() || 'upload.bin';
+        let ext = (path.extname(originalname) || '.jpg').replace(/[^a-zA-Z0-9.]/g, '').slice(0, 8) || '.jpg';
+        const fname = 'm' + Date.now() + '_' + Math.floor(Math.random() * 1e6) + ext;
+        const fpath = path.join(UP, fname);
+        fs.writeFileSync(fpath, content);
+        files.push({ fieldname: name, originalname: originalname, path: fpath, size: content.length });
+      } else {
+        fields[name] = content.toString('utf8');
+      }
+    }
+    if (last) break;
+    pos = cEnd + 2 + sep.length; // skip CRLF + delimiter
   }
-  const m = { id: `m${seq++}`, url, caption, author: 'Legacy User', createdAt: new Date().toISOString() };
-  moments.unshift(m);
-  return res.json({ success: true, message: 'Upload media successfully', data: m });
+  return { fields: fields, files: files };
+}
+
+const MIME = {
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+  '.webp': 'image/webp', '.gif': 'image/gif', '.mp4': 'video/mp4',
+  '.mov': 'video/quicktime', '.webm': 'video/webm',
+};
+
+function serveUpload(req, res, name) {
+  const safe = path.basename(name || '');
+  if (!safe || safe.charAt(0) === '.') { sendJSON(res, 400, { success: false, message: 'bad file' }); return; }
+  const fp = path.join(UP, safe);
+  fs.stat(fp, function (err, st) {
+    if (err || !st.isFile()) { sendJSON(res, 404, { success: false, message: 'not found' }); return; }
+    cors(res);
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(safe).toLowerCase()] || 'application/octet-stream', 'Content-Length': st.size });
+    fs.createReadStream(fp).pipe(res);
+  });
+}
+
+async function route(req, res, url) {
+  const method = req.method.toUpperCase();
+  const pathname = url.pathname;
+
+  if (method === 'OPTIONS') { cors(res); res.writeHead(204); res.end(); return; }
+
+  if (method === 'GET' && pathname === '/') {
+    const base = publicBase(req);
+    const html = DASHBOARD_HTML.split('__BASE__').join(base).split('__QR__').join(qrPayload(base));
+    cors(res);
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': Buffer.byteLength(html) });
+    res.end(html);
+    return;
+  }
+  if (method === 'GET' && pathname === '/api/health') {
+    sendJSON(res, 200, { status: 'ok', service: 'locketlegacy-mock', moments: moments.length, time: new Date().toISOString() });
+    return;
+  }
+  if (method === 'GET' && pathname === '/connect') {
+    const base = String(url.searchParams.get('base') || publicBase(req)).replace(/\/+$/, '');
+    sendJSON(res, 200, { apiBaseUrl: base, qrPayload: qrPayload(base), ios: 'Login → 📷 Scan QR → point at the dashboard code' });
+    return;
+  }
+  if (method === 'GET' && pathname === '/locket/logout') {
+    sendJSON(res, 200, { success: true, message: 'ok' });
+    return;
+  }
+  if (method === 'GET' && pathname.indexOf('/uploads/') === 0) {
+    serveUpload(req, res, decodeURIComponent(pathname.slice('/uploads/'.length)));
+    return;
+  }
+
+  if (method !== 'POST' || pathname.indexOf('/locket/') !== 0) {
+    sendJSON(res, 404, { success: false, message: 'not found' });
+    return;
+  }
+
+  const ctype = String(req.headers['content-type'] || '');
+  let body = {};
+  let files = [];
+  if (ctype.indexOf('multipart/form-data') === 0) {
+    const m = /boundary=(?:"([^"]+)"|([^;]+))/.exec(ctype);
+    if (!m) { sendJSON(res, 400, { success: false, message: 'missing multipart boundary' }); return; }
+    const raw = await readBody(req);
+    const parsed = parseMultipart(raw, (m[1] || m[2]).trim());
+    body = parsed.fields;
+    files = parsed.files;
+  } else {
+    const raw = await readBody(req);
+    if (raw.length > 0) {
+      try { body = JSON.parse(raw.toString('utf8')) || {}; }
+      catch (e) { sendJSON(res, 400, { success: false, message: 'invalid json' }); return; }
+    }
+  }
+
+  const authed = function () {
+    if (!authOk(req)) { sendJSON(res, 401, { success: false, error: { code: 'UNAUTHORIZED', message: 'missing token' } }); return false; }
+    return true;
+  };
+
+  if (pathname === '/locket/login') {
+    if (!body.email) { sendJSON(res, 400, { success: false, message: 'email required' }); return; }
+    ok(res, {
+      kind: 'identitytoolkit#VerifyPasswordResponse',
+      localId: 'mock-uid-1',
+      email: body.email,
+      displayName: 'Legacy User',
+      idToken: 'mock-id-token-abc123',
+      refreshToken: 'mock-refresh-abc123',
+      expiresIn: '3600',
+    });
+    return;
+  }
+  if (pathname === '/locket/refresh-token') {
+    ok(res, {
+      access_token: 'mock-id-token-abc123',
+      id_token: 'mock-id-token-abc123',
+      refresh_token: 'mock-refresh-abc123',
+      expires_in: '3600',
+      token_type: 'Bearer',
+      user_id: 'mock-uid-1',
+    });
+    return;
+  }
+  if (pathname === '/locket/getInfoUser') {
+    if (!authed()) return;
+    ok(res, {
+      uid: 'mock-uid-1', localId: 'mock-uid-1', email: 'demo@locket.legacy',
+      displayName: 'Legacy User', username: 'legacy', firstName: 'Legacy', lastName: 'User',
+      profilePicture: '', createdAt: new Date().toISOString(),
+    });
+    return;
+  }
+  if (pathname === '/locket/getAllFriendsV2') {
+    if (!authed()) return;
+    ok(res, [
+      { uid: 'friend-1', displayName: 'Dio', profilePicture: '' },
+      { uid: 'friend-2', displayName: 'Locket Fan', profilePicture: '' },
+    ]);
+    return;
+  }
+  if (pathname === '/locket/postMomentV1') {
+    if (!authed()) return;
+    let caption = '';
+    try { caption = JSON.parse(body.optionsData || '{}').caption || ''; }
+    catch (e) { caption = body.optionsData || ''; }
+    let murl = '';
+    if (files.length > 0) murl = '/uploads/' + path.basename(files[0].path);
+    const m = { id: 'm' + (seq++), url: murl, caption: caption, author: 'Legacy User', createdAt: new Date().toISOString() };
+    moments.unshift(m);
+    sendJSON(res, 200, { success: true, message: 'Upload media successfully', data: m });
+    return;
+  }
+  if (pathname === '/locket/postMomentV2') {
+    if (!authed()) return;
+    const mediaInfo = body.mediaInfo || {};
+    const options = body.options || {};
+    const m = { id: 'm' + (seq++), url: mediaInfo.url || '', caption: options.caption || '', author: 'Legacy User', createdAt: new Date().toISOString() };
+    moments.unshift(m);
+    sendJSON(res, 200, { success: true, message: 'Upload media successfully', data: m });
+    return;
+  }
+  if (pathname === '/locket/getMomentV2') {
+    if (!authed()) return;
+    sendJSON(res, 200, { success: true, message: 'ok', data: moments, nextPageToken: null });
+    return;
+  }
+  if (pathname === '/locket/getInfoMomentV2') {
+    const found = moments.filter(function (x) { return x.id === body.idMoment; });
+    sendJSON(res, 200, { success: true, message: 'ok', data: found, nextPageToken: null });
+    return;
+  }
+  if (pathname === '/locket/getAllMessageV2') {
+    sendJSON(res, 200, { success: true, message: 'ok', data: [], nextPageToken: null });
+    return;
+  }
+  sendJSON(res, 404, { success: false, message: 'not found' });
+}
+
+const server = http.createServer(function (req, res) {
+  let url;
+  try {
+    url = new URL(req.url || '/', 'http://' + (req.headers['host'] || ('localhost:' + PORT)));
+  } catch (e) {
+    sendJSON(res, 400, { success: false, message: 'bad request' });
+    return;
+  }
+  route(req, res, url).catch(function (err) {
+    if (!res.headersSent) sendJSON(res, err && err.message === 'body too large' ? 413 : 500, { success: false, message: (err && err.message) || 'error' });
+    else try { res.end(); } catch (e2) { /* noop */ }
+  });
 });
 
-app.post('/locket/postMomentV2', (req, res) => {
-  if (!authOk(req)) return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'missing token' } });
-  const { mediaInfo = {}, options = {} } = req.body || {};
-  const m = { id: `m${seq++}`, url: mediaInfo.url || '', caption: options.caption || '', author: 'Legacy User', createdAt: new Date().toISOString() };
-  moments.unshift(m);
-  return res.json({ success: true, message: 'Upload media successfully', data: m });
-});
-
-app.post('/locket/getMomentV2', (req, res) => {
-  if (!authOk(req)) return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'missing token' } });
-  return res.json({ success: true, message: 'ok', data: moments, nextPageToken: null });
-});
-
-app.post('/locket/getInfoMomentV2', (req, res) => {
-  const { idMoment } = req.body || {};
-  const m = moments.find((x) => x.id === idMoment);
-  return res.json({ success: true, message: 'ok', data: m ? [m] : [], nextPageToken: null });
-});
-
-app.post('/locket/getAllMessageV2', (req, res) => {
-  return res.json({ success: true, message: 'ok', data: [], nextPageToken: null });
-});
-
-app.listen(PORT, () => console.log(`LocketLegacy mock listening on :${PORT}`));
+server.listen(PORT, function () { console.log('LocketLegacy mock listening on :' + PORT); });
 
 const DASHBOARD_HTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">

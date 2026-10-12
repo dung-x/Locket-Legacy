@@ -1,14 +1,10 @@
 {
   "name": "locket-legacy-mock-server",
   "version": "1.0.0",
-  "description": "Minimal self-host compatible mock for LocketLegacy iOS (implements /locket/* per upstream API_DOCS)",
+  "description": "Zero-dependency self-host mock for LocketLegacy iOS (implements /locket/* per upstream API_DOCS). No npm install needed.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
-  "dependencies": {
-    "cors": "^2.8.5",
-    "express": "^4.19.2",
-    "multer": "^1.4.5-lts.1"
-  }
+  "dependencies": {}
 }

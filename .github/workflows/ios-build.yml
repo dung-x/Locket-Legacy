@@ -34,5 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Syntax check mock server (no deps — node builtins only)
+        run: node --check Server/server.js
       - name: Build mock API image
         run: docker build -t locketlegacy-api ./Server
