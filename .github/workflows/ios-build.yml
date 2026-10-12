@@ -16,6 +16,31 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
+      - name: Validate Xcode project integrity
+        run: |
+          python3 - <<'PY'
+          import re, sys
+          t = open('LocketLegacy.xcodeproj/project.pbxproj').read()
+          # 1. every object entry must live on exactly one balanced line
+          #    (a split entry means nested garbage Xcode silently drops).
+          body = t.split('objects = {', 1)[1].rsplit('rootObject', 1)[0]
+          bad = [l for l in body.splitlines() if l.strip() and l.count('{') != l.count('}')]
+          if bad:
+              print('CORRUPT pbxproj lines (unbalanced braces):')
+              [print('  ' + l.strip()[:160]) for l in bad]
+              sys.exit(1)
+          # 2. every source-phase ID must resolve to a top-level PBXBuildFile.
+          tops = set(re.findall(r'^\t\t([0-9A-F]{24}) = \{isa = PBXBuildFile;', t, re.M))
+          m = re.search(r'PBXSourcesBuildPhase.*?files = \((.*?)\);', t, re.S)
+          ids = [x.strip() for x in m.group(1).split(',')]
+          missing = [i for i in ids if i not in tops]
+          print('sources: %d, top-level build files OK' % len(ids))
+          if missing:
+              print('CORRUPT: sources without top-level PBXBuildFile:', missing)
+              sys.exit(1)
+          print('pbxproj integrity OK')
+          PY
+
       - name: Build (simulator, no signing)
         run: |
           xcrun simctl list devices available | head -n 30
