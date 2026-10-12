@@ -36,6 +36,11 @@ typedef void (^LDProgressBlock)(NSString *stage);
 // Social / extras (mirror upstream UX on self-host)
 - (void)getOverlaysWithCompletion:(LDJSONCompletion)completion;
 - (void)reactToMoment:(NSString *)momentId emoji:(NSString *)emoji completion:(LDJSONCompletion)completion;
+- (void)getMomentReactions:(NSString *)momentId completion:(LDJSONCompletion)completion;
+- (void)createMomentPayloadWithMediaInfo:(NSDictionary *)mediaInfo
+                                options:(NSDictionary *)options
+                            contentType:(NSString *)type
+                             completion:(LDJSONCompletion)completion;
 - (void)sendMessageWithText:(NSString *)text completion:(LDJSONCompletion)completion;
 - (void)registerPushToken:(NSString *)token completion:(LDJSONCompletion)completion;
 

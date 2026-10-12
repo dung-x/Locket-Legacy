@@ -45,7 +45,7 @@
         [self addSubview:_urlField];
 
         UILabel *hint = [[UILabel alloc] init];
-        hint.text = @"Self-host: your Docker address (or Scan QR). Original: api.locket-dio.com.";
+        hint.text = @"Self-host: your Docker address (or Scan QR). Original: api/auth/storage.locket-dio.com.";
         hint.textColor = [UIColor colorWithWhite:0.5 alpha:1];
         hint.font = [UIFont systemFontOfSize:11];
         hint.numberOfLines = 0;
@@ -146,12 +146,19 @@
     [self.owner.view endEditing:YES];
     NSString *base = [LDConfig effectiveBaseAPIURL];
     self.statusLabel.text = [NSString stringWithFormat:@"Testing %@ …", base];
-    NSString *u = [base stringByAppendingString:@"/api/health"];
+    // Self-host mock exposes /api/health; the original API answers / with {message}.
+    NSString *u = [[LDConfig backendMode] isEqualToString:@"original"]
+        ? base : [base stringByAppendingString:@"/api/health"];
     NSURLSessionDataTask *t = [[NSURLSession sharedSession] dataTaskWithURL:[NSURL URLWithString:u] completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (e) { self.statusLabel.text = [NSString stringWithFormat:@"❌ Unreachable: %@", e.localizedDescription]; return; }
             NSDictionary *json = d.length ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
-            if (![json isKindOfClass:[NSDictionary class]]) { self.statusLabel.text = @"❌ Not a LocketLegacy server (bad response)."; return; }
+            if (![json isKindOfClass:[NSDictionary class]]) { self.statusLabel.text = @"❌ Not a Locket API (bad response)."; return; }
+            if (!json[@"serverVersion"] && [json[@"message"] isKindOfClass:[NSString class]]) {
+                // Original production root answers {message} with no version endpoint.
+                self.statusLabel.text = @"✅ Reachable (Original API). Log in to verify credentials.";
+                return;
+            }
             NSString *ver = [json[@"serverVersion"] isKindOfClass:[NSString class]] ? json[@"serverVersion"] : @"(old server — pull + rebuild for uploads!)";
             NSArray *feat = [json[@"features"] isKindOfClass:[NSArray class]] ? json[@"features"] : @[];
             BOOL canSend = [feat containsObject:@"presignedV3"];

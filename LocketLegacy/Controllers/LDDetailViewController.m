@@ -1,6 +1,7 @@
 // Moment detail: full media, meta, emoji reactions (❤️ 🔥 😂 + more).
 #import "LDDetailViewController.h"
 #import "../API/LDAPIClient.h"
+#import "../Config.h"
 #import "../Models/LDMoment.h"
 
 @interface LDDetailViewController ()
@@ -127,6 +128,25 @@
 }
 
 - (void)refreshReactions {
+    // Production shape: getMomentReactions -> data (array of {emoji,…} or counts).
+    if ([[LDConfig backendMode] isEqualToString:@"original"]) {
+        [[LDAPIClient shared] getMomentReactions:self.moment.momentId completion:^(NSDictionary *json, NSError *error) {
+            if (error) return;
+            id d = json[@"data"];
+            NSMutableDictionary *counts = [NSMutableDictionary dictionary];
+            if ([d isKindOfClass:[NSArray class]]) {
+                for (id o in d) {
+                    NSString *e = [o isKindOfClass:[NSDictionary class]] ? o[@"emoji"] : nil;
+                    if (![e isKindOfClass:[NSString class]] || !e.length) continue;
+                    counts[e] = @([counts[e] integerValue] + 1);
+                }
+            } else if ([d isKindOfClass:[NSDictionary class]]) {
+                for (id k in d) { if ([d[k] isKindOfClass:[NSNumber class]]) counts[k] = d[k]; }
+            }
+            if (counts.count) { self.moment.reactions = counts; [self renderReactions]; }
+        }];
+        return;
+    }
     [[LDAPIClient shared] getInfoMoment:self.moment.momentId completion:^(NSDictionary *json, NSError *error) {
         if (error) return;
         NSArray *list = [LDMoment listFromJSON:json];

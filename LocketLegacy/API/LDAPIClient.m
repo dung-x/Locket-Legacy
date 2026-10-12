@@ -6,9 +6,12 @@
 - (void)POSTRaw:(NSString *)path body:(nullable NSDictionary *)body completion:(LDJSONCompletion)completion;
 - (void)POSTURL:(NSString *)urlStr body:(NSDictionary *)body completion:(void(^)(NSDictionary * _Nullable json, NSInteger status, NSError * _Nullable error))completion;
 - (void)POSTURL:(NSString *)urlStr body:(NSDictionary *)body retried:(BOOL)retried completion:(void(^)(NSDictionary * _Nullable json, NSInteger status, NSError * _Nullable error))completion;
+- (void)POSTURLRaw:(NSString *)urlStr body:(NSDictionary *)body completion:(void(^)(NSDictionary * _Nullable json, NSInteger status, NSError * _Nullable error))completion;
+- (void)GETURL:(NSString *)urlStr retried:(BOOL)retried completion:(void(^)(NSDictionary * _Nullable json, NSInteger status, NSError * _Nullable error))completion;
 - (void)applyDioHeaders:(NSMutableURLRequest *)req;
 - (BOOL)needsRefreshForJSON:(NSDictionary *)json status:(NSInteger)code;
 - (BOOL)tryRefreshThen:(void(^)(void))retry;
+- (void)finishLoginWithJSON:(NSDictionary *)json error:(NSError *)err completion:(LDJSONCompletion)completion;
 @end
 
 @implementation LDAPIClient
@@ -131,55 +134,110 @@
 }
 
 - (void)loginWithEmail:(NSString *)email password:(NSString *)password completion:(LDJSONCompletion)completion {
+    // Original production auth lives on auth.locket-dio.com as locket/loginV2
+    // (captchaToken empty = Turnstile off, same as the web default config).
+    if ([[LDConfig backendMode] isEqualToString:@"original"]) {
+        NSString *u = [[LDConfig authBaseURL] stringByAppendingString:@"/locket/loginV2"];
+        [self POSTURL:u body:@{@"email": email ?: @"", @"password": password ?: @"", @"captchaToken": @""} completion:^(NSDictionary *json, NSInteger status, NSError *err) {
+            [self finishLoginWithJSON:json error:err completion:completion];
+        }];
+        return;
+    }
     [self POST:@"/login" body:@{@"email": email ?: @"", @"password": password ?: @""} completion:^(NSDictionary *json, NSError *err) {
-        if (!err) {
-            NSDictionary *data = json[@"data"];
-            NSString *tok = data[@"idToken"];
-            if (![tok isKindOfClass:[NSString class]]) tok = data[@"access_token"];
-            NSString *refresh = data[@"refreshToken"];
-            if (![refresh isKindOfClass:[NSString class]]) refresh = data[@"refresh_token"];
-            if ([tok isKindOfClass:[NSString class]]) {
-                self.idToken = tok;
-                [[NSUserDefaults standardUserDefaults] setObject:tok forKey:kLDKeyIDToken];
-            }
-            if ([refresh isKindOfClass:[NSString class]]) {
-                [[NSUserDefaults standardUserDefaults] setObject:refresh forKey:kLDKeyRefreshToken];
-            }
-            NSString *uid = data[@"localId"];
-            if (![uid isKindOfClass:[NSString class]]) uid = data[@"user_id"];
-            if ([uid isKindOfClass:[NSString class]]) {
-                [[NSUserDefaults standardUserDefaults] setObject:uid forKey:kLDKeyUserID];
-            }
-            [[NSUserDefaults standardUserDefaults] synchronize];
-        }
-        completion(json, err);
+        [self finishLoginWithJSON:json error:err completion:completion];
     }];
 }
 
-- (void)refreshToken:(NSString *)refreshToken completion:(LDJSONCompletion)completion {
-    [self POSTRaw:@"/refresh-token" body:@{@"refreshToken": refreshToken ?: @""} completion:completion];
+- (void)finishLoginWithJSON:(NSDictionary *)json error:(NSError *)err completion:(LDJSONCompletion)completion {
+    if (!err) {
+        NSDictionary *data = [json isKindOfClass:[NSDictionary class]] ? json[@"data"] : nil;
+        if (![data isKindOfClass:[NSDictionary class]] && [json isKindOfClass:[NSDictionary class]]) data = json;
+        NSString *tok = data[@"idToken"];
+        if (![tok isKindOfClass:[NSString class]]) tok = data[@"access_token"];
+        if (![tok isKindOfClass:[NSString class]]) tok = data[@"id_token"];
+        NSString *refresh = data[@"refreshToken"];
+        if (![refresh isKindOfClass:[NSString class]]) refresh = data[@"refresh_token"];
+        if ([tok isKindOfClass:[NSString class]]) {
+            self.idToken = tok;
+            [[NSUserDefaults standardUserDefaults] setObject:tok forKey:kLDKeyIDToken];
+        }
+        if ([refresh isKindOfClass:[NSString class]]) {
+            [[NSUserDefaults standardUserDefaults] setObject:refresh forKey:kLDKeyRefreshToken];
+        }
+        NSString *uid = data[@"localId"];
+        if (![uid isKindOfClass:[NSString class]]) uid = data[@"user_id"];
+        if ([uid isKindOfClass:[NSString class]]) {
+            [[NSUserDefaults standardUserDefaults] setObject:uid forKey:kLDKeyUserID];
+        }
+        [[NSUserDefaults standardUserDefaults] synchronize];
+    }
+    completion(json, err);
 }
 
-- (void)logoutWithCompletion:(LDJSONCompletion)completion {
-    NSString *urlStr = [[self baseURL] stringByAppendingString:@"/logout"];
+- (void)GETURL:(NSString *)urlStr retried:(BOOL)retried completion:(void(^)(NSDictionary * _Nullable json, NSInteger status, NSError * _Nullable error))completion {
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:urlStr]];
     req.HTTPMethod = @"GET";
+    [self applyDioHeaders:req];
     if (self.idToken.length > 0) {
         [req setValue:[NSString stringWithFormat:@"Bearer %@", self.idToken] forHTTPHeaderField:@"Authorization"];
     }
     NSURLSessionDataTask *t = [[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
-        self.idToken = nil;
-        [[NSUserDefaults standardUserDefaults] removeObjectForKey:kLDKeyIDToken];
-        [[NSUserDefaults standardUserDefaults] removeObjectForKey:kLDKeyRefreshToken];
-        [[NSUserDefaults standardUserDefaults] synchronize];
-        NSDictionary *json = d.length ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : @{};
-        dispatch_async(dispatch_get_main_queue(), ^{ completion(json ?: @{}, e); });
+        NSInteger code = [r isKindOfClass:[NSHTTPURLResponse class]] ? ((NSHTTPURLResponse *)r).statusCode : 0;
+        if (e) { dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, code, e); }); return; }
+        NSDictionary *json = d.length ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+        if (![json isKindOfClass:[NSDictionary class]]) json = @{};
+        if (!retried && [self needsRefreshForJSON:json status:code] && [self tryRefreshThen:^{
+            [self GETURL:urlStr retried:YES completion:completion];
+        }]) return;
+        NSDictionary *j = json;
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(j, code, nil); });
     }];
     [t resume];
 }
 
+- (void)refreshToken:(NSString *)refreshToken completion:(LDJSONCompletion)completion {
+    // Production refresh lives on the auth host; self-host serves it on the API host.
+    if ([[LDConfig backendMode] isEqualToString:@"original"]) {
+        NSString *u = [[LDConfig authBaseURL] stringByAppendingString:@"/locket/refresh-token"];
+        [self POSTURLRaw:u body:@{@"refreshToken": refreshToken ?: @""} completion:^(NSDictionary *json, NSInteger status, NSError *error) {
+            completion(json, error);
+        }];
+        return;
+    }
+    [self POSTRaw:@"/refresh-token" body:@{@"refreshToken": refreshToken ?: @""} completion:completion];
+}
+
+- (void)logoutWithCompletion:(LDJSONCompletion)completion {
+    // Production logout lives on the auth host (GET); self-host mirrors it.
+    NSString *host = [[LDConfig backendMode] isEqualToString:@"original"] ? [LDConfig authBaseURL] : [LDConfig baseAPIURL];
+    NSString *urlStr = [host stringByAppendingString:@"/locket/logout"];
+    [self GETURL:urlStr retried:NO completion:^(NSDictionary *json, NSInteger status, NSError *e) {
+        self.idToken = nil;
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:kLDKeyIDToken];
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:kLDKeyRefreshToken];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+        completion(json ?: @{}, e);
+    }];
+}
+
 - (void)getInfoUserWithCompletion:(LDJSONCompletion)completion {
-    [self POST:@"/getInfoUser" body:@{} completion:completion];
+    // Production serves GET {auth}/locket/getInfoUser; self-host mock serves
+    // POST {base}/locket/getInfoUser. Try the native shape first, fall back.
+    if ([[LDConfig backendMode] isEqualToString:@"original"]) {
+        NSString *u = [[LDConfig authBaseURL] stringByAppendingString:@"/locket/getInfoUser"];
+        [self GETURL:u retried:NO completion:^(NSDictionary *json, NSInteger status, NSError *e) {
+            if (!e && status >= 200 && status < 300) { completion(json, nil); return; }
+            [self POST:@"/getInfoUser" body:@{} completion:completion];
+        }];
+        return;
+    }
+    [self POST:@"/getInfoUser" body:@{} completion:^(NSDictionary *json, NSError *error) {
+        if (!error) { completion(json, nil); return; }
+        NSString *u = [[LDConfig baseAPIURL] stringByAppendingString:@"/locket/getInfoUser"];
+        [self GETURL:u retried:NO completion:^(NSDictionary *j2, NSInteger s2, NSError *e2) {
+            completion(j2, e2);
+        }];
+    }];
 }
 - (void)getAllFriendsWithCompletion:(LDJSONCompletion)completion {
     [self POST:@"/getAllFriendsV2" body:@{} completion:completion];
@@ -251,7 +309,7 @@ static NSString * const kLDClientVersion = @"iOS1.0";
     [self POSTURL:urlStr body:body retried:NO completion:completion];
 }
 
-- (void)POSTURL:(NSString *)urlStr body:(NSDictionary *)body retried:(BOOL)retried completion:(void(^)(NSDictionary * _Nullable json, NSInteger status, NSError * _Nullable error))completion {
+- (void)POSTURLRaw:(NSString *)urlStr body:(NSDictionary *)body completion:(void(^)(NSDictionary * _Nullable json, NSInteger status, NSError * _Nullable error))completion {
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:urlStr]];
     req.HTTPMethod = @"POST";
     [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
@@ -265,13 +323,20 @@ static NSString * const kLDClientVersion = @"iOS1.0";
         if (e) { dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, code, e); }); return; }
         NSDictionary *json = d.length ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
         if (![json isKindOfClass:[NSDictionary class]]) json = @{};
-        if (!retried && [self needsRefreshForJSON:json status:code] && [self tryRefreshThen:^{
-            [self POSTURL:urlStr body:body retried:YES completion:completion];
-        }]) return;
         NSDictionary *j = json;
         dispatch_async(dispatch_get_main_queue(), ^{ completion(j, code, nil); });
     }];
     [t resume];
+}
+
+- (void)POSTURL:(NSString *)urlStr body:(NSDictionary *)body retried:(BOOL)retried completion:(void(^)(NSDictionary * _Nullable json, NSInteger status, NSError * _Nullable error))completion {
+    [self POSTURLRaw:urlStr body:body completion:^(NSDictionary *json, NSInteger status, NSError *e) {
+        if (e) { completion(nil, status, e); return; }
+        if (!retried && [self needsRefreshForJSON:json status:status] && [self tryRefreshThen:^{
+            [self POSTURL:urlStr body:body retried:YES completion:completion];
+        }]) return;
+        completion(json, status, nil);
+    }];
 }
 
 - (void)sendMomentOriginalFlowWithFileURL:(NSURL *)fileURL
@@ -327,7 +392,7 @@ static NSString * const kLDClientVersion = @"iOS1.0";
                 });
                 return;
             }
-            // Step 3/3: postMomentV2 (mirrors PostMoments + V5 options shape).
+            // Step 3/3: finalize the post.
             if (progress) progress(@"3/3 posting moment…");
             NSDictionary *mediaInfo = @{@"url": publicURL, @"path": key, @"name": fileName,
                                         @"size": @(fileData.length), @"uploadedAt": [[self class] isoNow], @"type": type};
@@ -339,6 +404,18 @@ static NSString * const kLDClientVersion = @"iOS1.0";
                 for (id k in extra) { if ([k isKindOfClass:[NSString class]]) options[k] = extra[k] ?: @""; }
             }
             dispatch_async(dispatch_get_main_queue(), ^{
+                if ([[LDConfig backendMode] isEqualToString:@"original"]) {
+                    // Production: ask Dio to build the official payload, then post it.
+                    // (The middle hop targets Locket's servers via Dio; the exact
+                    //  shape is confirmed live with a real account.)
+                    [self createMomentPayloadWithMediaInfo:mediaInfo options:options contentType:type completion:^(NSDictionary *json, NSError *error) {
+                        if (error) { completion(nil, error); return; }
+                        id payload = json[@"payload"];
+                        if (!payload) { completion(json, nil); return; }
+                        [self POST:@"/postMomentV2" body:@{@"payload": payload} completion:completion];
+                    }];
+                    return;
+                }
                 [self POST:@"/postMomentV2" body:@{@"model": @"Version-UploadmediaV3.1", @"mediaInfo": mediaInfo,
                                                    @"options": options, @"contentType": type} completion:completion];
             });
@@ -388,6 +465,22 @@ static NSString * const kLDClientVersion = @"iOS1.0";
 
 - (void)reactToMoment:(NSString *)momentId emoji:(NSString *)emoji completion:(LDJSONCompletion)completion {
     [self POST:@"/reactToMoment" body:@{@"momentId": momentId ?: @"", @"emoji": emoji ?: @"❤️"} completion:completion];
+}
+
+- (void)getMomentReactions:(NSString *)momentId completion:(LDJSONCompletion)completion {
+    // Production shape: POST {api}/locket/getMomentReactions {data:{moment_uid}}.
+    [self POST:@"/getMomentReactions" body:@{@"data": @{@"moment_uid": momentId ?: @""}} completion:completion];
+}
+
+- (void)createMomentPayloadWithMediaInfo:(NSDictionary *)mediaInfo
+                                options:(NSDictionary *)options
+                            contentType:(NSString *)type
+                             completion:(LDJSONCompletion)completion {
+    // Production step: POST {api}/locket/createMomentPayloadV2 -> {payload}.
+    [self POST:@"/createMomentPayloadV2"
+          body:@{@"model": @"Version-UploadmediaV3.1", @"mediaInfo": mediaInfo ?: @{},
+                 @"options": options ?: @{}, @"contentType": type ?: @"image"}
+    completion:completion];
 }
 
 - (void)sendMessageWithText:(NSString *)text completion:(LDJSONCompletion)completion {

@@ -21,6 +21,7 @@ static NSString * const kLDKeyBackendMode  = @"LDBackendMode"; // selfhost | ori
 
 // Original project endpoints (Client-Locket-Dio web .env defaults).
 static NSString * const kLDOriginalBaseAPIURL    = @"https://api.locket-dio.com";
+static NSString * const kLDOriginalAuthAPIURL     = @"https://auth.locket-dio.com";
 static NSString * const kLDOriginalStorageAPIURL = @"https://storage.locket-dio.com";
 // Public frontend key, same one the web client embeds (VITE_PUBLIC_API_KEY).
 static NSString * const kLDDioPublicAPIKey = @"LKD-LOCKETDIO-AB02F55KYM55DD02MM03YY25-LKD";
@@ -34,6 +35,7 @@ static NSString * const kLDDioPublicAPIKey = @"LKD-LOCKETDIO-AB02F55KYM55DD02MM0
 + (NSString *)backendMode;
 + (void)setBackendMode:(NSString *)mode;
 + (NSString *)effectiveBaseAPIURL;
++ (NSString *)authBaseURL;
 + (NSArray<NSString *> *)storageBaseCandidates;
 + (NSDictionary *)dioHeaders;
 @end

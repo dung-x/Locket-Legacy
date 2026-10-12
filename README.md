@@ -70,8 +70,11 @@ docker-compose.yml             `docker compose up -d --build` → API on :5001
 2. Select iPhone simulator (iOS 12+), Run.
 3. Pick the backend in Login → ① (or later in Profile → ⚙️ Settings):
    - **Self-host Docker**: your `http://<lan-ip>:5001` (or 📷 Scan QR from the dashboard).
-   - **Original Locket Dio API**: `https://api.locket-dio.com` + `https://storage.locket-dio.com`,
-     with the same public `x-api-key` / `x-app-*` headers the web client sends.
+   - **Original Locket Dio API** (needs the dev's permission): auth → `auth.locket-dio.com`
+     (`loginV2`, `refresh-token`, `logout`, `getInfoUser`), data → `api.locket-dio.com`
+     (`postMomentV2`/`createMomentPayloadV2`, moments, friends, messages, reactions),
+     storage → `storage.locket-dio.com` (`presignedV3`) — with the same public
+     `x-api-key` / `x-app-*` headers the web client sends.
 
 ### Self-host mock (from manual)
 

@@ -32,6 +32,10 @@
     if ([[self backendMode] isEqualToString:@"original"]) return kLDOriginalBaseAPIURL;
     return [self baseAPIURL];
 }
++ (NSString *)authBaseURL {
+    if ([[self backendMode] isEqualToString:@"original"]) return kLDOriginalAuthAPIURL;
+    return [self baseAPIURL];
+}
 + (NSArray<NSString *> *)storageBaseCandidates {
     if ([[self backendMode] isEqualToString:@"original"]) return @[kLDOriginalStorageAPIURL];
     NSString *base = [self baseAPIURL];
