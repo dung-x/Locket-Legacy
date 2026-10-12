@@ -38,7 +38,7 @@
     if (self.videoURL) {
         self.player = [AVPlayer playerWithURL:self.videoURL];
         self.playerLayer = [AVPlayerLayer playerLayerWithPlayer:self.player];
-        self.playerLayer.videoGravity = AVLayerVideoGravityResizeAspectFit;
+        self.playerLayer.videoGravity = AVLayerVideoGravityResizeAspect;
         [self.imageView.layer addSublayer:self.playerLayer];
         [self.player play];
     }
