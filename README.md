@@ -1,0 +1,87 @@
+# 📸 Locket Legacy — iOS (Objective-C, iOS 12+)
+
+Native iOS port of [Client-Locket-Dio](https://github.com/doi2523/Client-Locket-Dio) (web).
+Same product idea, same screens, rewritten in **Objective-C + UIKit**, **minimum iOS 12.0**, zero third-party pods.
+
+## Screens (Core MVP, mirrors web)
+
+| Web (`apps/self-hosted/web/src`) | iOS |
+|---|---|
+| `pages/Public/Login` | `LDLoginViewController` — email+password, editable API base URL |
+| `pages/LocketCameraBeta/MainHomeScreen` (live feed, flip, flash) | `LDCameraViewController` — AVFoundation live preview, front/back, flash, photo shutter, video REC, library pick |
+| `components/common/CropImageStudio` | Square crop in camera + preview |
+| Preview / caption / overlay | `LDPreviewViewController` — caption field, audience segment, `postMomentV1` multipart upload |
+| Moment history (`getMomentV2`) | `LDFeedViewController` — 3-col grid (`LDMomentCell`) |
+| Friends (`getAllFriendsV2`) | `LDFriendsViewController` |
+| Profile (`getInfoUser`) | `LDProfileViewController` — user info, server setting, logout |
+
+## API mapping (upstream `apps/self-hosted/api`)
+
+Base URL default `http://localhost:5001`, routes under `/locket` (see upstream `API_DOCS.md` + `src/routes/locket.route.js`):
+
+- `POST /locket/login` → `LDAPIClient loginWithEmail`
+- `POST /locket/refresh-token`, `GET /locket/logout`
+- `POST /locket/getInfoUser`, `POST /locket/getAllFriendsV2`
+- `POST /locket/postMomentV1` (multipart `file` + `optionsData.caption`) → camera Send
+- `POST /locket/postMomentV2` (JSON `mediaInfo` + `options`) → available in client
+- `POST /locket/getMomentV2`, `POST /locket/getInfoMomentV2`, `POST /locket/getAllMessageV2`
+
+Auth: `Authorization: Bearer <idToken>`, token persisted in `NSUserDefaults`.
+
+## Project layout
+
+```
+LocketLegacy.xcodeproj/        hand-written, Xcode 15 compatible
+LocketLegacy/
+  main.m, AppDelegate.h/m      no SceneDelegate (iOS 12 safe)
+  Config.h/m                   base URL store
+  API/LDAPIClient.h/m
+  Models/LDUser, LDMoment, LDFriend
+  Controllers/ Login, MainTab, Camera, Preview, Feed, Friends, Profile
+  Views/ LDMomentCell, LDFriendCell
+  Info.plist, LaunchScreen.storyboard
+Server/                        self-host mock (Express) implementing /locket/* for dev
+docker-compose.yml             `docker compose up -d --build` → API on :5001
+.github/workflows/ios-build.yml  macOS build + docker build
+```
+
+## Run
+
+### iOS
+1. Open `LocketLegacy.xcodeproj` in Xcode 14+.
+2. Select iPhone simulator (iOS 12+), Run.
+3. On Login, set API URL to your backend (e.g. `http://192.168.1.5:5001` on device).
+
+### Self-host mock (from manual)
+
+Upstream manual (`apps/self-hosted/README.md`) requires Firebase/R2 secrets and 3 services
+(api :5001, storage :5003, web :5173). For iOS dev this repo ships a zero-config mock
+with the same routes:
+
+```bash
+docker compose up -d --build
+curl http://localhost:5001/
+# login test:
+curl -X POST http://localhost:5001/locket/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"demo@locket.legacy","password":"x"}'
+```
+
+To use the real upstream backend instead:
+```bash
+git clone https://github.com/doi2523/Client-Locket-Dio /tmp/upstream
+cd /tmp/upstream/apps/self-hosted
+cp api/.env.example api/.env.production
+# fill FIREBASE_*, LOCKET_API_BASE, etc.
+docker compose up -d --build
+```
+Then point the iOS app at that host.
+
+### CI
+`ios-build.yml` builds with `xcodebuild -sdk iphonesimulator ... CODE_SIGNING_ALLOWED=NO`
+on `macos-15`, plus builds the mock Docker image.
+
+## Notes / limits
+- Objective-C, UIKit programmatic layout (no SwiftUI, no SF Symbols, no compositional layout) for iOS 12.
+- No push notifications / PWA / music overlay in MVP (web-only features).
+- Image download in feed uses plain `NSData dataWithContentsOfURL` for simplicity.

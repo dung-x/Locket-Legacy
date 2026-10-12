@@ -1,0 +1,14 @@
+Xcode
+DerivedData/
+*.xcworkspace
+!*.xcodeproj
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+.DS_Store
+Pods/
+node_modules/
+Server/uploads/
+Server/uploads/tmp/
+*.mov
