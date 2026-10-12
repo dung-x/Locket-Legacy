@@ -24,6 +24,10 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSArray<NSDictionary *> *)pendingOutboxItems;
 + (void)removeOutboxItem:(NSString *)itemId;
 + (void)markOutboxSent:(NSString *)itemId error:(nullable NSString *)error;
+// Maintenance for the Settings page.
++ (NSUInteger)outboxCount;
++ (void)clearOutbox;
++ (void)clearCaches;
 @end
 
 NS_ASSUME_NONNULL_END

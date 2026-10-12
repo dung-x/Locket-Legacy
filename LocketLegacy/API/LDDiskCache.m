@@ -99,4 +99,21 @@
     }
 }
 
++ (NSUInteger)outboxCount {
+    return [self pendingOutboxItems].count;
+}
+
++ (void)clearOutbox {
+    for (NSDictionary *item in [self pendingOutboxItems]) {
+        [self removeOutboxItem:item[@"id"]];
+    }
+}
+
++ (void)clearCaches {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (NSString *n in @[@"moments.json", @"friends.json", @"messages.json", @"overlays.json"]) {
+        [fm removeItemAtPath:[self cachePath:n] error:nil];
+    }
+}
+
 @end

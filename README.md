@@ -13,7 +13,8 @@ Same product idea, same screens, rewritten in **Objective-C + UIKit**, **minimum
 | Preview / caption / overlay | `LDPreviewViewController` — caption field, audience segment, `postMomentV1` multipart upload |
 | Moment history (`getMomentV2`) | `LDFeedViewController` — 3-col grid (`LDMomentCell`) |
 | Friends (`getAllFriendsV2`) | `LDFriendsViewController` |
-| Profile (`getInfoUser`) | `LDProfileViewController` — user info, labeled server row + Scan QR, logout |
+| Profile (`getInfoUser`) | `LDProfileViewController` — user info, streak, backend summary, entry to Settings |
+| Settings (new) | `LDSettingsViewController` — backend preset, theme, push, storage, about, logout |
 | Server QR connect | `LDQRScannerViewController` — AVFoundation QR scan, accepts `locketlegacy://connect?api=…`, raw URL, or JSON |
 
 ## Connect via QR (phone ↔ Docker)
@@ -67,7 +68,10 @@ docker-compose.yml             `docker compose up -d --build` → API on :5001
 ### iOS
 1. Open `LocketLegacy.xcodeproj` in Xcode 14+.
 2. Select iPhone simulator (iOS 12+), Run.
-3. On Login, set API URL to your backend (e.g. `http://192.168.1.5:5001` on device).
+3. Pick the backend in Login → ① (or later in Profile → ⚙️ Settings):
+   - **Self-host Docker**: your `http://<lan-ip>:5001` (or 📷 Scan QR from the dashboard).
+   - **Original Locket Dio API**: `https://api.locket-dio.com` + `https://storage.locket-dio.com`,
+     with the same public `x-api-key` / `x-app-*` headers the web client sends.
 
 ### Self-host mock (from manual)
 

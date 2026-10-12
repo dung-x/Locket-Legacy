@@ -6,6 +6,7 @@
 - (void)POSTRaw:(NSString *)path body:(nullable NSDictionary *)body completion:(LDJSONCompletion)completion;
 - (void)POSTURL:(NSString *)urlStr body:(NSDictionary *)body completion:(void(^)(NSDictionary * _Nullable json, NSInteger status, NSError * _Nullable error))completion;
 - (void)POSTURL:(NSString *)urlStr body:(NSDictionary *)body retried:(BOOL)retried completion:(void(^)(NSDictionary * _Nullable json, NSInteger status, NSError * _Nullable error))completion;
+- (void)applyDioHeaders:(NSMutableURLRequest *)req;
 - (BOOL)needsRefreshForJSON:(NSDictionary *)json status:(NSInteger)code;
 - (BOOL)tryRefreshThen:(void(^)(void))retry;
 @end
@@ -27,7 +28,13 @@
 }
 
 - (NSString *)baseURL {
-    return [[LDConfig baseAPIURL] stringByAppendingString:@"/locket"];
+    return [[LDConfig effectiveBaseAPIURL] stringByAppendingString:@"/locket"];
+}
+
+- (void)applyDioHeaders:(NSMutableURLRequest *)req {
+    for (NSString *k in [LDConfig dioHeaders]) {
+        [req setValue:[LDConfig dioHeaders][k] forHTTPHeaderField:k];
+    }
 }
 
 - (void)POST:(NSString *)path body:(nullable NSDictionary *)body completion:(LDJSONCompletion)completion {
@@ -43,6 +50,7 @@
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
     req.HTTPMethod = @"POST";
     [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    [self applyDioHeaders:req];
     if (self.idToken.length > 0) {
         [req setValue:[NSString stringWithFormat:@"Bearer %@", self.idToken] forHTTPHeaderField:@"Authorization"];
     }
@@ -66,6 +74,7 @@
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
     req.HTTPMethod = @"POST";
     [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    [self applyDioHeaders:req];
     if (self.idToken.length > 0) {
         [req setValue:[NSString stringWithFormat:@"Bearer %@", self.idToken] forHTTPHeaderField:@"Authorization"];
     }
@@ -232,18 +241,10 @@ static NSString * const kLDClientVersion = @"iOS1.0";
     return [f stringFromDate:[NSDate date]];
 }
 
-// Storage hosts to try, in order: the API host itself (bundled mock), then the
-// same host with :5001 -> :5003 (upstream split-host layout).
+// Storage hosts to try, in order (see LDConfig: self-host API host, then the
+// upstream split-host layout; original preset pins storage.locket-dio.com).
 - (NSArray<NSString *> *)storageBaseCandidates {
-    NSString *base = [LDConfig baseAPIURL];
-    while (base.length > 1 && [base hasSuffix:@"/"]) base = [base substringToIndex:base.length - 1];
-    NSMutableArray *out = [NSMutableArray arrayWithObject:base];
-    NSRange r = [base rangeOfString:@":5001"];
-    if (r.location != NSNotFound) {
-        NSString *alt = [base stringByReplacingCharactersInRange:r withString:@":5003"];
-        if (![alt isEqualToString:base]) [out addObject:alt];
-    }
-    return out;
+    return [LDConfig storageBaseCandidates];
 }
 
 - (void)POSTURL:(NSString *)urlStr body:(NSDictionary *)body completion:(void(^)(NSDictionary * _Nullable json, NSInteger status, NSError * _Nullable error))completion {
@@ -254,6 +255,7 @@ static NSString * const kLDClientVersion = @"iOS1.0";
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:urlStr]];
     req.HTTPMethod = @"POST";
     [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    [self applyDioHeaders:req];
     if (self.idToken.length > 0) {
         [req setValue:[NSString stringWithFormat:@"Bearer %@", self.idToken] forHTTPHeaderField:@"Authorization"];
     }
@@ -371,9 +373,10 @@ static NSString * const kLDClientVersion = @"iOS1.0";
 #pragma mark - Social / extras
 
 - (void)getOverlaysWithCompletion:(LDJSONCompletion)completion {
-    NSString *u = [[LDConfig baseAPIURL] stringByAppendingString:@"/api/overlays"];
+    NSString *u = [[LDConfig effectiveBaseAPIURL] stringByAppendingString:@"/api/overlays"];
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:u]];
     req.HTTPMethod = @"GET";
+    [self applyDioHeaders:req];
     NSURLSessionDataTask *t = [[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
         NSDictionary *json = (d.length && !e) ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
         if (![json isKindOfClass:[NSDictionary class]]) json = @{};
@@ -392,7 +395,7 @@ static NSString * const kLDClientVersion = @"iOS1.0";
 }
 
 - (void)registerPushToken:(NSString *)token completion:(LDJSONCompletion)completion {
-    NSString *u = [[LDConfig baseAPIURL] stringByAppendingString:@"/api/push/register"];
+    NSString *u = [[LDConfig effectiveBaseAPIURL] stringByAppendingString:@"/api/push/register"];
     [self POSTURL:u body:@{@"token": token ?: @"", @"platform": @"ios"} completion:^(NSDictionary *json, NSInteger status, NSError *error) {
         completion(json, error);
     }];
