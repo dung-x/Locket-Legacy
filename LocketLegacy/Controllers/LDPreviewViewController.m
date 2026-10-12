@@ -150,9 +150,20 @@
     BOOL isVideo = (self.videoURL != nil);
     NSURL *file = [self stagedFileURL:isVideo];
     NSString *caption = self.captionField.text ?: @"";
+    // Same audience values the web client sends (determineRecipients: selected
+    // keeps a list, anything else posts to everyone).
+    NSString *audience = (self.audience.selectedSegmentIndex == 1) ? @"selected" : @"all";
     self.sendButton.enabled = NO;
-    self.statusLabel.text = @"Uploading via postMomentV1…";
-    [[LDAPIClient shared] postMomentV1WithFileURL:file isVideo:isVideo caption:caption completion:^(NSDictionary *json, NSError *error) {
+    self.statusLabel.text = @"Sending (original 3-step method)…";
+    // Original method: presigned URL -> PUT bytes -> postMomentV2 (see LDAPIClient).
+    [[LDAPIClient shared] sendMomentOriginalFlowWithFileURL:file
+                                                    isVideo:isVideo
+                                                    caption:caption
+                                                   audience:audience
+                                                   progress:^(NSString *stage) {
+                                                       self.statusLabel.text = stage;
+                                                   }
+                                                 completion:^(NSDictionary *json, NSError *error) {
         self.sendButton.enabled = YES;
         if (error) { self.statusLabel.text = error.localizedDescription; return; }
         if ([json[@"success"] boolValue]) {

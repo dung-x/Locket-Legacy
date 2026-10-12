@@ -31,6 +31,22 @@ typedef void (^LDJSONCompletion)(NSDictionary * _Nullable json, NSError * _Nulla
                           options:(NSDictionary *)options
                        completion:(LDJSONCompletion)completion;
 
+typedef void (^LDProgressBlock)(NSString *stage);
+
+// Original web-client method (mirrors createRequestPayloadV5 + PostMoments):
+//  1/3 POST {storage}/api/presignedV3  -> {url, publicURL, key}
+//  2/3 PUT raw bytes to the presigned url
+//  3/3 POST /locket/postMomentV2 {model, mediaInfo, options, contentType}
+// Storage hosts tried in order: the API host itself, then the same host with
+// :5001 swapped to :5003 (upstream split-host layout). Works with the bundled
+// mock (single host) and with upstream self-host (api :5001 + storage :5003).
+- (void)sendMomentOriginalFlowWithFileURL:(NSURL *)fileURL
+                                 isVideo:(BOOL)isVideo
+                                 caption:(NSString *)caption
+                                audience:(NSString *)audience
+                                progress:(nullable LDProgressBlock)progress
+                              completion:(LDJSONCompletion)completion;
+
 @property (nonatomic, copy, nullable) NSString *idToken;
 @end
 

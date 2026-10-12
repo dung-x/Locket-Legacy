@@ -22,6 +22,32 @@ if (!fs.existsSync(UP)) fs.mkdirSync(UP, { recursive: true });
 let moments = [];
 let seq = 1;
 
+// One-time presigned PUT grants: token -> { key, fname, contentType, expires }.
+const pendingUploads = {};
+const MOCK_UID = 'mock-uid-1';
+const ALLOWED_MIME_TYPES = [
+  'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'image/heif',
+  'video/mp4', 'video/webm', 'video/quicktime',
+];
+
+function todayFolder() {
+  const d = new Date();
+  function p(n) { return (n < 10 ? '0' : '') + n; }
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+
+function randomToken() {
+  // 32 hex chars; Math.random is fine for a mock one-time grant.
+  let s = '';
+  const abc = '0123456789abcdef';
+  for (let i = 0; i < 32; i++) s += abc[Math.floor(Math.random() * 16)];
+  return s;
+}
+
+function safeFilename(name) {
+  return String(name || '').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 120) || 'file.bin';
+}
+
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -163,6 +189,63 @@ async function route(req, res, url) {
   }
   if (method === 'GET' && pathname.indexOf('/uploads/') === 0) {
     serveUpload(req, res, decodeURIComponent(pathname.slice('/uploads/'.length)));
+    return;
+  }
+
+  // ---- storage flow (mirrors upstream storage/api/presignedV3) ----
+  // Step 1: client asks for a one-time PUT grant.
+  if (method === 'POST' && pathname === '/api/presignedV3') {
+    if (!authOk(req)) { sendJSON(res, 401, { success: false, error: { code: 'UNAUTHORIZED', message: 'missing token' } }); return; }
+    let pj = {};
+    try { pj = JSON.parse((await readBody(req)).toString('utf8')) || {}; }
+    catch (e) { sendJSON(res, 400, { status: 'error', message: 'invalid json', errorCode: 'BAD_JSON' }); return; }
+    const filename = pj.filename;
+    const contentType = pj.contentType || '';
+    const ftype = pj.type || '';
+    if (!filename || !ftype) {
+      sendJSON(res, 400, { status: 'error', message: "Request body must include 'filename' and 'type'", errorCode: 'MISSING_BODY_FIELDS' });
+      return;
+    }
+    if (ALLOWED_MIME_TYPES.indexOf(contentType) === -1) {
+      sendJSON(res, 400, { status: 'error', message: 'File type not allowed', errorCode: 'INVALID_FILE_TYPE', allowed: ALLOWED_MIME_TYPES });
+      return;
+    }
+    const safeType = contentType.indexOf('video/') === 0 ? 'video' : 'image';
+    const clean = safeFilename(filename);
+    const key = 'LocketCloud/' + todayFolder() + '/' + safeType + '/' + MOCK_UID + '/' + clean;
+    const ext = (path.extname(clean) || '.jpg').slice(0, 8);
+    const fname = 'm' + Date.now() + '_' + Math.floor(Math.random() * 1e6) + ext;
+    const token = randomToken();
+    pendingUploads[token] = { key: key, fname: fname, contentType: contentType, expires: Date.now() + 300000 };
+    const base = publicBase(req);
+    sendJSON(res, 200, {
+      status: 'success',
+      data: {
+        url: base + '/api/upload/' + token,
+        expiresIn: 300,
+        key: key,
+        publicURL: base + '/uploads/' + fname,
+      },
+      message: 'Presigned URL generated successfully',
+      meta: { note: 'Use this URL only once — it will expire in 5 minutes!' },
+    });
+    return;
+  }
+  // Step 2: raw bytes PUT to the granted URL (no auth header — grant IS the auth).
+  if (method === 'PUT' && pathname.indexOf('/api/upload/') === 0) {
+    const token = decodeURIComponent(pathname.slice('/api/upload/'.length));
+    const grant = pendingUploads[token];
+    delete pendingUploads[token]; // single use
+    if (!grant || grant.expires < Date.now()) {
+      sendJSON(res, 403, { status: 'error', message: 'Upload grant expired or invalid', errorCode: 'INVALID_GRANT' });
+      return;
+    }
+    let raw;
+    try { raw = await readBody(req); }
+    catch (e) { sendJSON(res, 413, { status: 'error', message: 'body too large', errorCode: 'TOO_LARGE' }); return; }
+    if (!raw.length) { sendJSON(res, 400, { status: 'error', message: 'empty file', errorCode: 'EMPTY_FILE' }); return; }
+    fs.writeFileSync(path.join(UP, grant.fname), raw);
+    sendJSON(res, 200, { status: 'success', data: { key: grant.key, size: raw.length }, message: 'uploaded' });
     return;
   }
 
@@ -324,7 +407,7 @@ button.ghost{background:#26262e;color:#fff}pre{background:#0e0e12;border:1px sol
 <label>idToken (paste from login — mock accepts any long Bearer)</label><input id="tok" value="mock-id-token-abc123">
 <div class="row"><button id="bUser">Get user</button><button id="bFriends">Friends</button><button id="bMoments">Moments</button></div>
 <pre id="dataOut">—</pre><div class="gallery" id="gal"></div></div>
-<div class="card"><h2>④ Upload tester → POST /locket/postMomentV1</h2>
+<div class="card"><h2>④ Upload tester → original flow (presigned → PUT → postMomentV2)</h2>
 <label>File (jpg/png/mp4)</label><input id="file" type="file" accept="image/*,video/*"><label>Caption</label><input id="cap" value="Hello from dashboard 📸">
 <button id="up">Upload moment</button><pre id="upOut">—</pre>
 <p class="hint">Endpoints: <span class="mono">/locket/login · /locket/refresh-token · /locket/logout · /locket/getInfoUser · /locket/getAllFriendsV2 · /locket/postMomentV1 · /locket/postMomentV2 · /locket/getMomentV2 · /locket/getInfoMomentV2 · /locket/getAllMessageV2</span><br>Health: <span class="mono">GET /api/health</span> · Connect JSON: <span class="mono">GET /connect</span></p></div>
@@ -346,5 +429,5 @@ function showData(p){p.then(function(j){$('dataOut').textContent=JSON.stringify(
 $('bUser').onclick=function(){showData(post('/locket/getInfoUser',{}))};
 $('bFriends').onclick=function(){showData(post('/locket/getAllFriendsV2',{}))};
 $('bMoments').onclick=function(){showData(post('/locket/getMomentV2',{}))};
-$('up').onclick=function(){var f=$('file').files[0];if(!f){$('upOut').textContent='Pick a file first';return}var fd=new FormData();fd.append('file',f);fd.append('optionsData',JSON.stringify({caption:$('cap').value}));var t=tok();var h={};if(t)h['Authorization']='Bearer '+t;fetch('/locket/postMomentV1',{method:'POST',headers:h,body:fd}).then(function(r){return r.json()}).then(function(j){$('upOut').textContent=JSON.stringify(j,null,2)}).catch(function(e){$('upOut').textContent=String(e)})};
+$('up').onclick=function(){var f=$('file').files[0];if(!f){$('upOut').textContent='Pick a file first';return}var t=tok();var h={'Content-Type':'application/json'};if(t)h['Authorization']='Bearer '+t;var kind=f.type.indexOf('video/')===0?'video':'image';var out=function(s){$('upOut').textContent=s};out('1/3 presigned…');fetch('/api/presignedV3',{method:'POST',headers:h,body:JSON.stringify({filename:f.name,contentType:f.type,type:kind,size:f.size,uploadedAt:new Date().toISOString()})}).then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})}).then(function(a){if(a.j.status!=='success')throw new Error(JSON.stringify(a.j));out('1/3 presigned OK → 2/3 PUT '+a.j.data.url);return fetch(a.j.data.url,{method:'PUT',headers:{'Content-Type':f.type},body:f}).then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j,pre:a.j.data}}})})}).then(function(a){if(a.j.status!=='success')throw new Error(JSON.stringify(a.j));out('2/3 PUT OK → 3/3 postMomentV2…');var mediaInfo={url:a.pre.publicURL,path:a.pre.key,name:f.name,size:f.size,uploadedAt:new Date().toISOString(),type:kind};return fetch('/locket/postMomentV2',{method:'POST',headers:h,body:JSON.stringify({model:'Version-UploadmediaV3.1',mediaInfo:mediaInfo,options:{caption:$('cap').value,audience:'all',recipients:[]}})})}).then(function(r){return r.json()}).then(function(j){out('3/3 postMomentV2:\n'+JSON.stringify(j,null,2))}).catch(function(e){out('FAILED: '+e.message||e)})};
 </script></body></html>`;

@@ -81,3 +81,37 @@ jobs:
           curl -s -X POST http://localhost:5001/locket/getMomentV2 \
             -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' -d '{}' \
             | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['success'] and len(d['data'])==1 and d['data'][0]['caption']=='ci pic', d; print('moments OK')"
+          echo "=== original 3-step flow: presigned -> PUT -> postMomentV2 ==="
+          curl -sf -X POST http://localhost:5001/api/presignedV3 \
+            -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+            -d '{"filename":"locketdio_123_mock-uid-1_cliCI.jpg","contentType":"image/jpeg","type":"image","size":16,"uploadedAt":"2026-10-12T00:00:00.000Z"}' \
+            | tee /tmp/pre.json
+          python3 - <<'PY'
+          import json
+          pre = json.load(open('/tmp/pre.json'))
+          assert pre['status'] == 'success', pre
+          d = pre['data']
+          assert d['url'] and d['publicURL'] and d['key'].startswith('LocketCloud/'), d
+          assert d['expiresIn'] == 300, d
+          open('/tmp/put_url.txt', 'w').write(d['url'])
+          open('/tmp/pub_url.txt', 'w').write(d['publicURL'])
+          open('/tmp/key.txt', 'w').write(d['key'])
+          print('presigned OK:', d['key'])
+          PY
+          curl -sf -X PUT --data-binary @pic.jpg -H 'Content-Type: image/jpeg' "$(cat /tmp/put_url.txt)" | tee /tmp/put.json
+          python3 -c "import json; j=json.load(open('/tmp/put.json')); assert j['status']=='success', j; print('PUT OK')"
+          PUB=$(cat /tmp/pub_url.txt); KEY=$(cat /tmp/key.txt)
+          curl -sf -X POST http://localhost:5001/locket/postMomentV2 \
+            -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+            -d "{\"model\":\"Version-UploadmediaV3.1\",\"mediaInfo\":{\"url\":\"$PUB\",\"path\":\"$KEY\",\"name\":\"locketdio_123_mock-uid-1_cliCI.jpg\",\"size\":16,\"uploadedAt\":\"2026-10-12T00:00:00.000Z\",\"type\":\"image\"},\"options\":{\"caption\":\"ci v2\",\"audience\":\"all\",\"recipients\":[]},\"contentType\":\"image\"}" \
+            | tee /tmp/v2.json
+          python3 -c "import json; j=json.load(open('/tmp/v2.json')); assert j['success'] is True, j; print('postMomentV2 OK')"
+          curl -s "$PUB" -o /tmp/dl2.jpg
+          cmp pic.jpg /tmp/dl2.jpg && echo "v2 roundtrip bytes identical"
+          curl -s -X POST http://localhost:5001/locket/getMomentV2 \
+            -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' -d '{}' \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); caps=[m['caption'] for m in d['data']]; assert 'ci v2' in caps, d; print('v2 moments OK:', caps)"
+          echo "=== invalid mime rejected (parity with upstream allow-list) ==="
+          curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost:5001/api/presignedV3 \
+            -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+            -d '{"filename":"x.exe","contentType":"application/x-msdownload","type":"image","size":3}' | grep -q 400 && echo "mime guard OK"

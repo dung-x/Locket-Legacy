@@ -31,9 +31,16 @@ Base URL default `http://localhost:5001`, routes under `/locket` (see upstream `
 - `POST /locket/login` → `LDAPIClient loginWithEmail`
 - `POST /locket/refresh-token`, `GET /locket/logout`
 - `POST /locket/getInfoUser`, `POST /locket/getAllFriendsV2`
-- `POST /locket/postMomentV1` (multipart `file` + `optionsData.caption`) → camera Send
-- `POST /locket/postMomentV2` (JSON `mediaInfo` + `options`) → available in client
+- `POST /locket/postMomentV1` (multipart `file` + `optionsData.caption`) → legacy path, kept as fallback
+- `POST /locket/postMomentV2` (JSON `mediaInfo` + `options`) → used by the original flow
 - `POST /locket/getMomentV2`, `POST /locket/getInfoMomentV2`, `POST /locket/getAllMessageV2`
+- `POST /api/presignedV3` + `PUT /api/upload/<token>` → storage grants, same as upstream `storage` service
+
+Send path (identical to web `createRequestPayloadV5` + `PostMoments`):
+1. filename `locketdio_<ms>_<localId>_cli<ver>.<ext>` → `POST {api}/api/presignedV3`
+   (falls back to same host `:5003` for upstream split-host) → `{url, publicURL, key}`
+2. `PUT` raw bytes to `url` with the file's `Content-Type`
+3. `POST /locket/postMomentV2` `{model: Version-UploadmediaV3.1, mediaInfo: {url, path, name, size, uploadedAt, type}, options: {caption, audience, recipients, …}, contentType}`
 
 Auth: `Authorization: Bearer <idToken>`, token persisted in `NSUserDefaults`.
 
