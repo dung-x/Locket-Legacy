@@ -18,12 +18,13 @@ jobs:
 
       - name: Build (simulator, no signing)
         run: |
+          xcrun simctl list devices available | head -n 30
           xcodebuild \
             -project LocketLegacy.xcodeproj \
             -scheme LocketLegacy \
             -configuration Debug \
             -sdk iphonesimulator \
-            -destination 'platform=iOS Simulator,name=iPhone 14,OS=latest' \
+            -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
