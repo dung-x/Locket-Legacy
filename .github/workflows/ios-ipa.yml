@@ -40,14 +40,26 @@ jobs:
           APP_PATH=$(find build/LocketLegacy.xcarchive/Products/Applications -name "*.app" -maxdepth 2 | head -n 1)
           echo "APP_PATH=$APP_PATH"
           test -d "$APP_PATH"
+          MAIN_BIN=$(basename "$APP_PATH" .app)
+          echo "MAIN_BIN=$MAIN_BIN"
+          # FAIL LOUDLY if the executable is missing (this was the v1.0.0 bug:
+          # Sources phase referenced wrong IDs so the .app shipped without a binary
+          # -> device error "Failed to unhide archs ... LocketLegacy.app/LocketLegacy").
+          test -f "$APP_PATH/$MAIN_BIN"
+          ls -lh "$APP_PATH/$MAIN_BIN"
+          otool -l "$APP_PATH/$MAIN_BIN" | grep -A2 LC_BUILD_VERSION | head -n 10 || true
+          lipo -info "$APP_PATH/$MAIN_BIN" || true
           rm -rf Payload
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
+          # Ad-hoc sign so the binary carries a signature (installable via
+          # TrollStore / re-signable via Sideloadly/AltStore; still NOT App Store).
+          codesign --force --sign - --deep "Payload/$MAIN_BIN.app" || true
+          codesign -dv "Payload/$MAIN_BIN.app" || true
+          test -f "Payload/$MAIN_BIN.app/$MAIN_BIN"
           zip -r LocketLegacy-unsigned.ipa Payload
           ls -lh *.ipa
-          # metadata for release notes
-          MAIN_BIN=$(basename "$APP_PATH" .app)
-          otool -l "Payload/$MAIN_BIN.app/$MAIN_BIN" 2>/dev/null | grep -A2 LC_BUILD_VERSION | head -n 10 || true
+          unzip -l LocketLegacy-unsigned.ipa
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
@@ -62,10 +74,14 @@ jobs:
           tag_name: ${{ inputs.tag }}
           name: LocketLegacy ${{ inputs.tag }} (unsigned IPA)
           body: |
-            Unsigned IPA built from `main` (Objective-C, iOS 12+).
+            IPA built from `main` (Objective-C, iOS 12+), ad-hoc signed.
 
-            - File: `LocketLegacy-unsigned.ipa` (no code signature — for inspection/sideloading via AltStore/Sideloadly; will NOT install as-is on stock devices without re-signing).
-            - For an installable signed IPA, add Apple Developer signing secrets and use ExportOptionsPlist with your provisioning profile.
+            - File: `LocketLegacy-unsigned.ipa` (ad-hoc signature only — NOT App Store / stock-installable as-is).
+            - v1.0.0 was broken (empty .app, no executable → `Failed to unhide archs` at 1%). This release fixes the Xcode Sources phase so the binary is included, and the workflow now fails loudly if the binary is missing.
+            - Install options:
+              1. Sideloadly / AltStore with your own Apple ID (they re-sign with a free 7-day cert) — recommended for stock devices.
+              2. TrollStore (if your iOS version supports it) can install the ad-hoc IPA more directly.
+              3. Direct `ideviceinstaller` / Apple Configurator without re-signing will still fail — that is expected for an unsigned/ad-hoc build.
             - Backend mock: `docker compose up -d --build` (API on :5001), then set API URL on the Login screen.
           files: LocketLegacy-unsigned.ipa
           fail_on_unmatched_files: true
