@@ -590,19 +590,29 @@ static NSString * const kLDClientVersion = @"iOS1.0";
                     // Production: Dio builds the official payload, then it goes
                     // straight to Locket (markMomentPayloadAsUsed is best-effort
                     // and skipped — no Dio-side moment id is available here).
+                    if (progress) progress(@"3/3 asking Dio to build the payload…");
                     [self createMomentPayloadWithMediaInfo:mediaInfo options:options contentType:type completion:^(NSDictionary *json, NSError *error) {
-                        if (error) { completion(nil, error); return; }
+                        if (error) {
+                            completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-4 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"step 3/3 (Dio payload): %@", error.localizedDescription]}]);
+                            return;
+                        }
                         id payload = json[@"payload"];
                         if (!payload) {
                             // Surface Dio's own reason (code + message) verbatim.
                             NSString *m = json[@"message"];
                             if (![m isKindOfClass:[NSString class]]) m = json[@"error"];
                             if (![m isKindOfClass:[NSString class]] || !((NSString *)m).length) m = @"Dio built no payload";
-                            completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-4 userInfo:@{NSLocalizedDescriptionKey: m}]);
+                            completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-4 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"step 3/3 (Dio payload): %@", m]}]);
                             return;
                         }
                         if (progress) progress(@"4/4 posting to Locket…");
-                        [self postOfficialMomentWithPayload:payload completion:completion];
+                        [self postOfficialMomentWithPayload:payload completion:^(NSDictionary *j2, NSError *e2) {
+                            if (e2) {
+                                completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-5 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"step 4/4 (Locket): %@", e2.localizedDescription]}]);
+                                return;
+                            }
+                            completion(j2, nil);
+                        });
                     }];
                     return;
                 }
@@ -697,7 +707,9 @@ static NSString * const kLDClientVersion = @"iOS1.0";
                 NSString *m = j[@"message"];
                 if (![m isKindOfClass:[NSString class]]) m = j[@"error"];
                 if (![m isKindOfClass:[NSString class]] || !((NSString *)m).length) {
-                    m = [NSString stringWithFormat:@"Locket API error (HTTP %ld)", (long)code];
+                    m = [NSString stringWithFormat:@"HTTP %ld", (long)code];
+                } else {
+                    m = [NSString stringWithFormat:@"HTTP %ld: %@", (long)code, m];
                 }
                 completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-5 userInfo:@{NSLocalizedDescriptionKey: m}]);
                 return;
