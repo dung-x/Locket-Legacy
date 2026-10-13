@@ -12,6 +12,7 @@
 - (BOOL)needsRefreshForJSON:(NSDictionary *)json status:(NSInteger)code;
 - (BOOL)tryRefreshThen:(void(^)(void))retry;
 - (void)finishLoginWithJSON:(NSDictionary *)json error:(NSError *)err completion:(LDJSONCompletion)completion;
+- (void)postOfficialMomentWithPayload:(NSDictionary *)payload retried:(BOOL)retried completion:(LDJSONCompletion)completion;
 @end
 
 @implementation LDAPIClient
@@ -508,14 +509,22 @@ static NSString * const kLDClientVersion = @"iOS1.0";
             }
             dispatch_async(dispatch_get_main_queue(), ^{
                 if ([[LDConfig backendMode] isEqualToString:@"original"]) {
-                    // Production: ask Dio to build the official payload, then post it.
-                    // (The middle hop targets Locket's servers via Dio; the exact
-                    //  shape is confirmed live with a real account.)
+                    // Production: Dio builds the official payload, then it goes
+                    // straight to Locket (markMomentPayloadAsUsed is best-effort
+                    // and skipped — no Dio-side moment id is available here).
                     [self createMomentPayloadWithMediaInfo:mediaInfo options:options contentType:type completion:^(NSDictionary *json, NSError *error) {
                         if (error) { completion(nil, error); return; }
                         id payload = json[@"payload"];
-                        if (!payload) { completion(json, nil); return; }
-                        [self POST:@"/postMomentV2" body:@{@"payload": payload} completion:completion];
+                        if (!payload) {
+                            // Surface Dio's own reason (code + message) verbatim.
+                            NSString *m = json[@"message"];
+                            if (![m isKindOfClass:[NSString class]]) m = json[@"error"];
+                            if (![m isKindOfClass:[NSString class]] || !((NSString *)m).length) m = @"Dio built no payload";
+                            completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-4 userInfo:@{NSLocalizedDescriptionKey: m}]);
+                            return;
+                        }
+                        if (progress) progress(@"4/4 posting to Locket…");
+                        [self postOfficialMomentWithPayload:payload completion:completion];
                     }];
                     return;
                 }
@@ -560,6 +569,69 @@ static NSString * const kLDClientVersion = @"iOS1.0";
           body:@{@"model": @"Version-UploadmediaV3.1", @"mediaInfo": mediaInfo ?: @{},
                  @"options": options ?: @{}, @"contentType": type ?: @"image"}
     completion:completion];
+}
+
+- (void)postOfficialMomentWithPayload:(NSDictionary *)payload completion:(LDJSONCompletion)completion {
+    [self postOfficialMomentWithPayload:payload retried:NO completion:completion];
+}
+
+- (void)postOfficialMomentWithPayload:(NSDictionary *)payload retried:(BOOL)retried completion:(LDJSONCompletion)completion {
+    if (![payload isKindOfClass:[NSDictionary class]]) {
+        completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-4 userInfo:@{NSLocalizedDescriptionKey: @"Upload failed at step 3/3 (no payload built)"}]);
+        return;
+    }
+    NSString *u = [[LDConfig locketOfficialBaseURL] stringByAppendingString:@"/postMomentV2"];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:u]];
+    req.HTTPMethod = @"POST";
+    req.timeoutInterval = 30;
+    for (NSString *k in [LDConfig locketHeaders]) {
+        [req setValue:[LDConfig locketHeaders][k] forHTTPHeaderField:k];
+    }
+    if (self.idToken.length > 0) {
+        [req setValue:[NSString stringWithFormat:@"Bearer %@", self.idToken] forHTTPHeaderField:@"Authorization"];
+    }
+    req.HTTPBody = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+    NSURLSessionDataTask *t = [[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+        NSInteger code = [r isKindOfClass:[NSHTTPURLResponse class]] ? ((NSHTTPURLResponse *)r).statusCode : 0;
+        if (e) { dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, e); }); return; }
+        NSDictionary *json = d.length ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+        if (![json isKindOfClass:[NSDictionary class]]) json = @{};
+        // 401 -> refresh the Dio/Firebase token once and retry (mirrors I's interceptor).
+        if (!retried && code == 401 && [self tryRefreshThen:^{
+            [self postOfficialMomentWithPayload:payload retried:YES completion:completion];
+        }]) return;
+        NSDictionary *j = json;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            // Mirrors the web client's ks() checks: errors[] -> message, status>=400, missing data.
+            id result = j[@"result"] ?: j[@"data"];
+            if ([result isKindOfClass:[NSDictionary class]]) {
+                id errs = result[@"errors"];
+                if ([errs isKindOfClass:[NSArray class]] && ((NSArray *)errs).count > 0) {
+                    NSMutableArray *msgs = [NSMutableArray array];
+                    for (id o in (NSArray *)errs) { if ([o isKindOfClass:[NSString class]]) [msgs addObject:o]; }
+                    NSString *m = msgs.count ? [msgs componentsJoinedByString:@", "] : @"Locket rejected the post";
+                    completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-5 userInfo:@{NSLocalizedDescriptionKey: m}]);
+                    return;
+                }
+            }
+            NSInteger st = [j[@"status"] integerValue];
+            if (code >= 400 || st >= 400) {
+                NSString *m = j[@"message"];
+                if (![m isKindOfClass:[NSString class]]) m = j[@"error"];
+                if (![m isKindOfClass:[NSString class]] || !((NSString *)m).length) {
+                    m = [NSString stringWithFormat:@"Locket API error (HTTP %ld)", (long)code];
+                }
+                completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-5 userInfo:@{NSLocalizedDescriptionKey: m}]);
+                return;
+            }
+            if (!result) {
+                completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-5 userInfo:@{NSLocalizedDescriptionKey: @"Locket returned no moment data"}]);
+                return;
+            }
+            completion(j, nil);
+        });
+    }];
+    [t resume];
 }
 
 - (void)fetchMemberSessionWithCompletion:(LDJSONCompletion)completion {

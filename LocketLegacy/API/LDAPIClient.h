@@ -50,6 +50,9 @@ typedef void (^LDProgressBlock)(NSString *stage);
                                 options:(NSDictionary *)options
                             contentType:(NSString *)type
                              completion:(LDJSONCompletion)completion;
+// Final hop on the original flow: POST the Dio-built payload straight to
+// official Locket (mirrors the web client's ks() call).
+- (void)postOfficialMomentWithPayload:(NSDictionary *)payload completion:(LDJSONCompletion)completion;
 // Production member session: GET {api}/api/me -> session {member_token, header}.
 // Must run after login (and when the token exists but member is missing);
 // the member header rides on every Dio call via applyDioHeaders.

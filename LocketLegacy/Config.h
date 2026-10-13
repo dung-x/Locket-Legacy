@@ -28,6 +28,8 @@ static NSString * const kLDOriginalAuthAPIURL     = @"https://auth.locket-dio.co
 static NSString * const kLDOriginalStorageAPIURL = @"https://storage.locket-dio.com";
 // Public frontend key, same one the web client embeds (VITE_PUBLIC_API_KEY).
 static NSString * const kLDDioPublicAPIKey = @"LKD-LOCKETDIO-AB02F55KYM55DD02MM03YY25-LKD";
+// Official Locket host for the final moment post (same as the web client).
+static NSString * const kLDLocketOfficialAPIURL = @"https://api.locketcamera.com";
 
 @interface LDConfig : NSObject
 + (NSString *)baseAPIURL;
@@ -41,6 +43,8 @@ static NSString * const kLDDioPublicAPIKey = @"LKD-LOCKETDIO-AB02F55KYM55DD02MM0
 + (NSString *)authBaseURL;
 + (NSArray<NSString *> *)storageBaseCandidates;
 + (NSDictionary *)dioHeaders;
++ (NSString *)locketOfficialBaseURL;
++ (NSDictionary *)locketHeaders;
 @end
 
 NS_ASSUME_NONNULL_END
