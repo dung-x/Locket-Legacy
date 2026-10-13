@@ -399,15 +399,8 @@ static NSString * const kLDClientVersion = @"iOS1.0";
         }
     }
     if (!key.length) {
-        // Production sends folder + server-chosen filename instead of a key.
-        if ([folder isKindOfClass:[NSString class]] && folder.length > 0 && [base isKindOfClass:[NSString class]] && base.length > 0) {
-            while (folder.length > 1 && [folder hasSuffix:@"/"]) folder = [folder substringToIndex:folder.length - 1];
-            key = [folder stringByAppendingPathComponent:base];
-        }
-    }
-    if (!key.length) {
-        // Fallback: R2 signed PUT URLs embed the object key as
-        // /{bucket}/{key}?X-Amz-… — strip the bucket segment and the query.
+        // Prefer the R2 signed PUT URL: its path IS the object key
+        // (/{bucket}/{key}?X-Amz-…), ground truth regardless of folder shape.
         NSString *putStr = [putURL isKindOfClass:[NSString class]] ? putURL : nil;
         NSURL *pu = putStr ? [NSURL URLWithString:putStr] : nil;
         NSString *ppath = [pu.path isKindOfClass:[NSString class]] ? pu.path : @"";
@@ -418,6 +411,13 @@ static NSString * const kLDClientVersion = @"iOS1.0";
         if (segs.count >= 2) {
             [segs removeObjectAtIndex:0]; // bucket name
             key = [segs componentsJoinedByString:@"/"];
+        }
+    }
+    if (!key.length) {
+        // Fallback: folder + server-chosen filename.
+        if ([folder isKindOfClass:[NSString class]] && folder.length > 0 && [base isKindOfClass:[NSString class]] && base.length > 0) {
+            while (folder.length > 1 && [folder hasSuffix:@"/"]) folder = [folder substringToIndex:folder.length - 1];
+            key = [folder stringByAppendingPathComponent:base];
         }
     }
     if ([key isKindOfClass:[NSString class]] && key.length > 0) g[@"key"] = key;
