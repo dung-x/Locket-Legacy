@@ -115,8 +115,12 @@
 }
 
 - (void)loadImage {
-    NSString *url = self.moment.isVideo ? self.moment.videoURL : self.moment.imageURL;
-    if (self.moment.isVideo) { self.iv.image = nil; self.metaLabel.text = [self.metaLabel.text stringByAppendingString:[NSString stringWithFormat:@"\n▶ %@", url]]; }
+    // Video shows its thumbnail poster; photos load full media (thumbnail fallback).
+    NSString *url = self.moment.isVideo
+        ? (self.moment.thumbnailURL.length ? self.moment.thumbnailURL : self.moment.videoURL)
+        : (self.moment.imageURL.length ? self.moment.imageURL : self.moment.thumbnailURL);
+    if (!url.length) return;
+    if (self.moment.isVideo) { self.iv.image = nil; self.metaLabel.text = [self.metaLabel.text stringByAppendingString:[NSString stringWithFormat:@"\n▶ %@", self.moment.videoURL]]; }
     if (!url.length) return;
     NSURL *u = [NSURL URLWithString:url];
     if (!u) return;

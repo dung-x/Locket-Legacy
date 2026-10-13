@@ -40,7 +40,8 @@
 - (void)configure:(LDMoment *)m {
     self.cap.text = m.isVideo ? [NSString stringWithFormat:@"▶ %@", m.caption] : m.caption;
     self.iv.image = nil;
-    NSString *url = m.isVideo ? m.videoURL : m.imageURL;
+    // Grid prefers the thumbnail (matches web thumbs); falls back to full media.
+    NSString *url = m.thumbnailURL.length ? m.thumbnailURL : (m.isVideo ? m.videoURL : m.imageURL);
     if (!url.length) return;
     NSURL *u = [NSURL URLWithString:url];
     if (!u) return;

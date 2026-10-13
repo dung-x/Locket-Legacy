@@ -3,6 +3,7 @@
 @property (nonatomic, copy) NSString *momentId;
 @property (nonatomic, copy) NSString *imageURL;
 @property (nonatomic, copy) NSString *videoURL;
+@property (nonatomic, copy) NSString *thumbnailURL;
 @property (nonatomic, copy) NSString *caption;
 @property (nonatomic, copy) NSString *authorName;
 @property (nonatomic, copy) NSString *createdAt;
