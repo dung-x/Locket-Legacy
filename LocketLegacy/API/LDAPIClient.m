@@ -385,21 +385,38 @@ static NSString * const kLDClientVersion = @"iOS1.0";
     }
     if ([pub isKindOfClass:[NSString class]]) g[@"publicURL"] = pub;
     NSString *key = [data[@"key"] isKindOfClass:[NSString class]] ? data[@"key"] : nil;
+    NSString *folder = [data[@"folder"] isKindOfClass:[NSString class]] ? data[@"folder"] : nil;
+    NSString *base = nil;
+    if ([pub isKindOfClass:[NSString class]]) {
+        NSURL *u = [NSURL URLWithString:pub];
+        base = u.path.lastPathComponent;
+        if (![base isKindOfClass:[NSString class]] || !base.length) {
+            NSArray *parts = [pub componentsSeparatedByString:@"/"];
+            base = parts.lastObject;
+        }
+        if ([base rangeOfString:@"?"].location != NSNotFound) {
+            base = [base substringToIndex:[base rangeOfString:@"?"].location];
+        }
+    }
     if (!key.length) {
         // Production sends folder + server-chosen filename instead of a key.
-        NSString *folder = [data[@"folder"] isKindOfClass:[NSString class]] ? data[@"folder"] : nil;
-        NSString *base = nil;
-        if ([pub isKindOfClass:[NSString class]]) {
-            NSURL *u = [NSURL URLWithString:pub];
-            base = u.path.lastPathComponent;
-            if (![base isKindOfClass:[NSString class]] || !base.length) {
-                NSArray *parts = [pub componentsSeparatedByString:@"/"];
-                base = parts.lastObject;
-            }
-        }
         if ([folder isKindOfClass:[NSString class]] && folder.length > 0 && [base isKindOfClass:[NSString class]] && base.length > 0) {
             while (folder.length > 1 && [folder hasSuffix:@"/"]) folder = [folder substringToIndex:folder.length - 1];
             key = [folder stringByAppendingPathComponent:base];
+        }
+    }
+    if (!key.length) {
+        // Fallback: R2 signed PUT URLs embed the object key as
+        // /{bucket}/{key}?X-Amz-… — strip the bucket segment and the query.
+        NSString *putStr = [putURL isKindOfClass:[NSString class]] ? putURL : nil;
+        NSURL *pu = putStr ? [NSURL URLWithString:putStr] : nil;
+        NSMutableArray *segs = [NSMutableArray array];
+        for (NSString *s in [[pu.path ?: @"" ] componentsSeparatedByString:@"/"]) {
+            if (s.length) [segs addObject:s];
+        }
+        if (segs.count >= 2) {
+            [segs removeObjectAtIndex:0]; // bucket name
+            key = [segs componentsJoinedByString:@"/"];
         }
     }
     if ([key isKindOfClass:[NSString class]] && key.length > 0) g[@"key"] = key;
@@ -522,8 +539,9 @@ static NSString * const kLDClientVersion = @"iOS1.0";
                 if (dump.length > 400) dump = [[dump substringToIndex:400] stringByAppendingString:@"…"];
             }
             NSLog(@"presigned response missing fields. putURL=%@ publicURL=%@ key=%@ raw=%@", putURL, publicURL, key, dump);
+            NSString *missing = !putURL.length ? @"put-url" : (!key.length ? @"key" : @"public-url");
             NSString *msg = [NSString stringWithFormat:@"Upload failed at step 1/3 (presigned reply lacks %@). Got: %@",
-                (!putURL.length ? @"put-url" : (!key.length ? @"key" : @"public-url")), dump];
+                missing, dump];
             completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-2 userInfo:@{NSLocalizedDescriptionKey: msg}]);
             return;
         }
