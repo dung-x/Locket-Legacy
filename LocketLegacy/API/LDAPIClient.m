@@ -410,8 +410,9 @@ static NSString * const kLDClientVersion = @"iOS1.0";
         // /{bucket}/{key}?X-Amz-… — strip the bucket segment and the query.
         NSString *putStr = [putURL isKindOfClass:[NSString class]] ? putURL : nil;
         NSURL *pu = putStr ? [NSURL URLWithString:putStr] : nil;
+        NSString *ppath = [pu.path isKindOfClass:[NSString class]] ? pu.path : @"";
         NSMutableArray *segs = [NSMutableArray array];
-        for (NSString *s in [[pu.path ?: @"" ] componentsSeparatedByString:@"/"]) {
+        for (NSString *s in [ppath componentsSeparatedByString:@"/"]) {
             if (s.length) [segs addObject:s];
         }
         if (segs.count >= 2) {
