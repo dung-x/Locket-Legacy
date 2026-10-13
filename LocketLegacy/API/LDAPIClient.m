@@ -421,7 +421,9 @@ static NSString * const kLDClientVersion = @"iOS1.0";
 // (key/folder + server-side filename rebuild the storage path for step 3).
 - (NSDictionary *)normalizedGrant:(NSDictionary *)data {
     if (![data isKindOfClass:[NSDictionary class]]) return @{};
-    NSMutableDictionary *g = [NSMutableDictionary dictionary];
+    // Preserve every server field (mediaId and future keys included) and
+    // normalize the known ones — the web client forwards its grant wholesale.
+    NSMutableDictionary *g = [data mutableCopy];
     id putURL = data[@"url"];
     if (![putURL isKindOfClass:[NSString class]]) putURL = data[@"uploadUrl"];
     if ([putURL isKindOfClass:[NSString class]]) g[@"url"] = putURL;
@@ -624,8 +626,9 @@ static NSString * const kLDClientVersion = @"iOS1.0";
             // Production-issued grant extras the payload builder may require.
             // Sent BOTH inside mediaInfo and top-level: the server half of this
             // contract isn't public, and either location must validate.
+            // (mediaId in particular: the web keys queue items off it.)
             NSMutableDictionary *fullMedia = [mediaInfo mutableCopy];
-            for (NSString *k in @[@"mediaSignature", @"owner"]) {
+            for (NSString *k in @[@"mediaSignature", @"owner", @"mediaId", @"id", @"folder"]) {
                 id v = data[k];
                 if ([v isKindOfClass:[NSString class]] && ((NSString *)v).length > 0) { fullMedia[k] = v; }
             }
@@ -712,7 +715,7 @@ static NSString * const kLDClientVersion = @"iOS1.0";
     NSMutableDictionary *body = [@{@"model": @"Version-UploadmediaV3.1", @"mediaInfo": mediaInfo ?: @{},
                  @"options": options ?: @{}, @"contentType": type ?: @"image"} mutableCopy];
     if ([mediaInfo isKindOfClass:[NSDictionary class]]) {
-        for (NSString *k in @[@"mediaSignature", @"owner"]) {
+        for (NSString *k in @[@"mediaSignature", @"owner", @"mediaId", @"id", @"folder"]) {
             id v = mediaInfo[k];
             if ([v isKindOfClass:[NSString class]] && ((NSString *)v).length > 0) body[k] = v;
         }
