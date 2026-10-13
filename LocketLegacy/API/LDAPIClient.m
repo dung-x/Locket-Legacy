@@ -8,6 +8,7 @@
 - (void)POSTURL:(NSString *)urlStr body:(NSDictionary *)body retried:(BOOL)retried completion:(void(^)(NSDictionary * _Nullable json, NSInteger status, NSError * _Nullable error))completion;
 - (void)POSTURLRaw:(NSString *)urlStr body:(NSDictionary *)body completion:(void(^)(NSDictionary * _Nullable json, NSInteger status, NSError * _Nullable error))completion;
 - (void)GETURL:(NSString *)urlStr retried:(BOOL)retried completion:(void(^)(NSDictionary * _Nullable json, NSInteger status, NSError * _Nullable error))completion;
+- (NSDictionary *)normalizedGrant:(NSDictionary *)data;
 - (void)applyDioHeaders:(NSMutableURLRequest *)req;
 - (BOOL)needsRefreshForJSON:(NSDictionary *)json status:(NSInteger)code;
 - (BOOL)tryRefreshThen:(void(^)(void))retry;
@@ -365,6 +366,50 @@ static NSString * const kLDClientVersion = @"iOS1.0";
     }];
 }
 
+// Unify the two presigned shapes into {url, publicURL, key, mediaSignature, owner}:
+// self-host mock  -> {url, publicURL, key}
+// production      -> {uploadUrl, publicUrl, folder, mediaSignature, owner}
+// (key/folder + server-side filename rebuild the storage path for step 3).
+- (NSDictionary *)normalizedGrant:(NSDictionary *)data {
+    if (![data isKindOfClass:[NSDictionary class]]) return @{};
+    NSMutableDictionary *g = [NSMutableDictionary dictionary];
+    id putURL = data[@"url"];
+    if (![putURL isKindOfClass:[NSString class]]) putURL = data[@"uploadUrl"];
+    if ([putURL isKindOfClass:[NSString class]]) g[@"url"] = putURL;
+    id pub = data[@"publicURL"];
+    for (NSString *k in @[@"publicUrl", @"public_url", @"downloadURL", @"download_url", @"fileUrl", @"file_url"]) {
+        if (![pub isKindOfClass:[NSString class]]) {
+            id v = data[k];
+            if ([v isKindOfClass:[NSString class]] && ((NSString *)v).length > 0) pub = v;
+        }
+    }
+    if ([pub isKindOfClass:[NSString class]]) g[@"publicURL"] = pub;
+    NSString *key = [data[@"key"] isKindOfClass:[NSString class]] ? data[@"key"] : nil;
+    if (!key.length) {
+        // Production sends folder + server-chosen filename instead of a key.
+        NSString *folder = [data[@"folder"] isKindOfClass:[NSString class]] ? data[@"folder"] : nil;
+        NSString *base = nil;
+        if ([pub isKindOfClass:[NSString class]]) {
+            NSURL *u = [NSURL URLWithString:pub];
+            base = u.path.lastPathComponent;
+            if (![base isKindOfClass:[NSString class]] || !base.length) {
+                NSArray *parts = [pub componentsSeparatedByString:@"/"];
+                base = parts.lastObject;
+            }
+        }
+        if ([folder isKindOfClass:[NSString class]] && folder.length > 0 && [base isKindOfClass:[NSString class]] && base.length > 0) {
+            while (folder.length > 1 && [folder hasSuffix:@"/"]) folder = [folder substringToIndex:folder.length - 1];
+            key = [folder stringByAppendingPathComponent:base];
+        }
+    }
+    if ([key isKindOfClass:[NSString class]] && key.length > 0) g[@"key"] = key;
+    for (NSString *k in @[@"mediaSignature", @"owner"]) {
+        id v = data[k];
+        if ([v isKindOfClass:[NSString class]] && ((NSString *)v).length > 0) g[k] = v;
+    }
+    return g;
+}
+
 - (void)sendMomentOriginalFlowWithFileURL:(NSURL *)fileURL
                                  isVideo:(BOOL)isVideo
                                  caption:(NSString *)caption
@@ -430,7 +475,7 @@ static NSString * const kLDClientVersion = @"iOS1.0";
             NSDictionary *data = [json isKindOfClass:[NSDictionary class]] ? json[@"data"] : nil;
             BOOL ok = !error && [json[@"status"] isKindOfClass:[NSString class]] &&
                       [json[@"status"] isEqualToString:@"success"] && [data isKindOfClass:[NSDictionary class]];
-            if (ok) { completion(data, nil); return; }
+            if (ok) { completion([self normalizedGrant:data], nil); return; }
             NSString *msg = @"";
             if ([json isKindOfClass:[NSDictionary class]]) {
                 id m = json[@"message"];
@@ -463,7 +508,7 @@ static NSString * const kLDClientVersion = @"iOS1.0";
         NSString *putURL = [data[@"url"] isKindOfClass:[NSString class]] ? data[@"url"] : nil;
         // Production field names have drifted before; accept known variants.
         NSString *publicURL = nil;
-        for (NSString *k in @[@"publicURL", @"public_url", @"downloadURL", @"download_url", @"fileUrl", @"file_url"]) {
+        for (NSString *k in @[@"publicURL", @"publicUrl", @"public_url", @"downloadURL", @"download_url", @"fileUrl", @"file_url"]) {
             id v = data[k];
             if ([v isKindOfClass:[NSString class]] && ((NSString *)v).length > 0) { publicURL = v; break; }
         }
@@ -498,8 +543,22 @@ static NSString * const kLDClientVersion = @"iOS1.0";
             }
             // Step 3/3: finalize the post.
             if (progress) progress(@"3/3 posting moment…");
-            NSDictionary *mediaInfo = @{@"url": publicURL, @"path": key, @"name": fileName,
+            // Prefer the server-chosen object name (basename of its public URL):
+            // production stores the file under a renamed object, not our filename.
+            NSString *objName = fileName;
+            NSURL *pubU = [NSURL URLWithString:publicURL];
+            if ([pubU.path.lastPathComponent isKindOfClass:[NSString class]] && pubU.path.lastPathComponent.length > 0) {
+                objName = pubU.path.lastPathComponent;
+            }
+            NSDictionary *mediaInfo = @{@"url": publicURL, @"path": key, @"name": objName,
                                         @"size": @(fileData.length), @"uploadedAt": [[self class] isoNow], @"type": type};
+            // Production-issued grant extras the payload builder may require.
+            NSMutableDictionary *fullMedia = [mediaInfo mutableCopy];
+            for (NSString *k in @[@"mediaSignature", @"owner"]) {
+                id v = data[k];
+                if ([v isKindOfClass:[NSString class]] && ((NSString *)v).length > 0) fullMedia[k] = v;
+            }
+            mediaInfo = fullMedia;
             NSString *aud = ([audience isKindOfClass:[NSString class]] && audience.length) ? audience : @"all";
             NSMutableDictionary *options = [@{@"caption": caption ?: @"", @"overlay_id": @"standard", @"type": @"default",
                                               @"icon": @"", @"text_color": @"#FFFFFF", @"color_top": @"", @"color_bottom": @"",
