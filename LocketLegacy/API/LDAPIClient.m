@@ -361,7 +361,9 @@
 
 #pragma mark - Original send flow (presigned PUT + postMomentV2)
 
-static NSString * const kLDClientVersion = @"iOS1.0";
+// Filename/client tag the live web app uses (x.app.clientVersion).
+// The presigned + payload endpoints validate it — must match the web.
+static NSString * const kLDWebClientVersion = @"Beta1.7.7";
 
 + (NSString *)isoNow {
     static NSDateFormatter *f = nil;
@@ -503,14 +505,15 @@ static NSString * const kLDClientVersion = @"iOS1.0";
             return;
         }
     }
-    // Mirrors PayloadServices.createRequestPayloadV5 naming.
+    // Mirrors the web's presigned filename:
+    // locketdio_<ms>_<localId>_cli<clientVersion>.<origExt>
     NSString *type = isVideo ? @"video" : @"image";
     NSString *mime = isVideo ? @"video/quicktime" : @"image/jpeg";
-    NSString *ext = isVideo ? @"mov" : @"jpg";
+    NSString *ext = fileURL.pathExtension.length ? fileURL.pathExtension : (isVideo ? @"mov" : @"jpg");
     NSString *localId = [[NSUserDefaults standardUserDefaults] stringForKey:kLDKeyUserID];
     if (![localId isKindOfClass:[NSString class]] || !localId.length) localId = @"unknown";
     long long ms = (long long)([[NSDate date] timeIntervalSince1970] * 1000.0);
-    NSString *fileName = [NSString stringWithFormat:@"locketdio_%lld_%@_cli%@.%@", ms, localId, kLDClientVersion, ext];
+    NSString *fileName = [NSString stringWithFormat:@"locketdio_%lld_%@_cli%@.%@", ms, localId, kLDWebClientVersion, ext];
     NSString *uploadedAt = [[self class] isoNow];
     NSDictionary *preBody = @{@"filename": fileName, @"contentType": mime, @"type": type,
                               @"size": @(fileData.length), @"uploadedAt": uploadedAt};
@@ -532,20 +535,44 @@ static NSString * const kLDClientVersion = @"iOS1.0";
                             completion:(void(^)(NSDictionary * _Nullable data, NSError * _Nullable error))completion {
     NSDictionary *preBody = @{@"filename": fileName ?: @"", @"contentType": mime ?: @"", @"type": type ?: @"",
                               @"size": @(size), @"uploadedAt": isoDate ?: @""};
-    NSArray<NSString *> *hosts = [self storageBaseCandidates];
+    // Endpoint order mirrors the live web client (VideoMuteButton `b()`):
+    // 1. POST {api}/createPresignedUrl — no /locket prefix, no storage host.
+    // 2. Legacy /api/presignedV3 fallbacks (older shape, kept for compat).
+    NSMutableArray<NSString *> *tries = [NSMutableArray array];
+    if ([[LDConfig backendMode] isEqualToString:@"original"]) {
+        [tries addObject:[[LDConfig effectiveBaseAPIURL] stringByAppendingString:@"/createPresignedUrl"]];
+    }
+    for (NSString *h in [self storageBaseCandidates]) {
+        [tries addObject:[h stringByAppendingString:@"/api/presignedV3"]];
+    }
     __block NSInteger hi = 0;
     __block void (^tryNext)(NSError *lastErr);
     tryNext = ^(NSError *lastErr) {
-        if (hi >= hosts.count) {
+        if (hi >= tries.count) {
             completion(nil, lastErr ?: [NSError errorWithDomain:@"LocketLegacy" code:-2 userInfo:@{NSLocalizedDescriptionKey: @"Upload failed at step 1/3 (presigned URL)"}]);
             return;
         }
-        NSString *u = [hosts[hi++] stringByAppendingString:@"/api/presignedV3"];
+        NSString *u = tries[hi++];
+        BOOL isWebEndpoint = [u hasSuffix:@"/createPresignedUrl"];
         [self POSTURL:u body:preBody completion:^(NSDictionary *json, NSInteger status, NSError *error) {
             NSDictionary *data = [json isKindOfClass:[NSDictionary class]] ? json[@"data"] : nil;
-            BOOL ok = !error && [json[@"status"] isKindOfClass:[NSString class]] &&
-                      [json[@"status"] isEqualToString:@"success"] && [data isKindOfClass:[NSDictionary class]];
-            if (ok) { completion([self normalizedGrant:data], nil); return; }
+            if (![data isKindOfClass:[NSDictionary class]]) data = nil;
+            // Web checks success===false as failure; legacy requires status==success.
+            BOOL explicitFail = NO;
+            if ([json isKindOfClass:[NSDictionary class]]) {
+                id ok = json[@"success"];
+                if ([ok isKindOfClass:[NSNumber class]] && ![ok boolValue]) explicitFail = YES;
+                if (!isWebEndpoint) {
+                    if (!([json[@"status"] isKindOfClass:[NSString class]] &&
+                          [json[@"status"] isEqualToString:@"success"])) explicitFail = YES;
+                }
+            }
+            if (!error && !explicitFail && data) {
+                NSMutableDictionary *g = [[self normalizedGrant:data] mutableCopy];
+                g[@"_dioGrantSource"] = isWebEndpoint ? @"createPresignedUrl" : @"presignedV3";
+                completion(g, nil);
+                return;
+            }
             NSString *msg = @"";
             if ([json isKindOfClass:[NSDictionary class]]) {
                 id m = json[@"message"];
@@ -575,15 +602,21 @@ static NSString * const kLDClientVersion = @"iOS1.0";
                                extra:(NSDictionary *)extra
                             progress:(LDProgressBlock)progress
                           completion:(LDJSONCompletion)completion {
-        NSString *putURL = [data[@"url"] isKindOfClass:[NSString class]] ? data[@"url"] : nil;
+        // The web PUTs to uploadUrl first, falling back to url.
+        NSString *putURL = [data[@"uploadUrl"] isKindOfClass:[NSString class]] ? data[@"uploadUrl"] : nil;
+        if (!putURL.length) putURL = [data[@"url"] isKindOfClass:[NSString class]] ? data[@"url"] : nil;
+        BOOL isWebGrant = [data[@"_dioGrantSource"] isKindOfClass:[NSString class]] &&
+                          [data[@"_dioGrantSource"] isEqualToString:@"createPresignedUrl"];
         // Production field names have drifted before; accept known variants.
+        // (Legacy presignedV3 grants only; web grants carry no public URL —
+        // the server builder resolves the media itself, exactly like the web.)
         NSString *publicURL = nil;
         for (NSString *k in @[@"publicURL", @"publicUrl", @"public_url", @"downloadURL", @"download_url", @"fileUrl", @"file_url"]) {
             id v = data[k];
             if ([v isKindOfClass:[NSString class]] && ((NSString *)v).length > 0) { publicURL = v; break; }
         }
         NSString *key = [data[@"key"] isKindOfClass:[NSString class]] ? data[@"key"] : nil;
-        if (!putURL.length || !publicURL.length || !key.length) {
+        if (!putURL.length || (!isWebGrant && (!publicURL.length || !key.length))) {
             // Report the actual payload (truncated) so a field rename is diagnosable on-screen.
             NSString *dump = @"{}";
             NSData *jd = [NSJSONSerialization dataWithJSONObject:data options:0 error:nil];
@@ -614,31 +647,48 @@ static NSString * const kLDClientVersion = @"iOS1.0";
             }
             // Step 3/3: finalize the post.
             if (progress) progress(@"3/3 posting moment…");
-            // Prefer the server-chosen object name (basename of its public URL):
-            // production stores the file under a renamed object, not our filename.
-            NSString *objName = fileName;
-            NSURL *pubU = [NSURL URLWithString:publicURL];
-            if ([pubU.path.lastPathComponent isKindOfClass:[NSString class]] && pubU.path.lastPathComponent.length > 0) {
-                objName = pubU.path.lastPathComponent;
+            NSDictionary *mediaInfo = nil;
+            if (isWebGrant) {
+                // Web-identical: the presigned grant IS the mediaInfo, forwarded
+                // wholesale with no client additions (VideoMuteButton `b()`).
+                NSMutableDictionary *m = [NSMutableDictionary dictionary];
+                for (id k in data) {
+                    if ([k isKindOfClass:[NSString class]] && ![k hasPrefix:@"_dio"]) m[k] = data[k];
+                }
+                mediaInfo = m;
+            } else {
+                // Legacy presignedV3 grant: rebuild the enriched shape.
+                // Prefer the server-chosen object name (basename of its public URL):
+                // production stores the file under a renamed object, not our filename.
+                NSString *objName = fileName;
+                NSURL *pubU = [NSURL URLWithString:publicURL];
+                if ([pubU.path.lastPathComponent isKindOfClass:[NSString class]] && pubU.path.lastPathComponent.length > 0) {
+                    objName = pubU.path.lastPathComponent;
+                }
+                NSMutableDictionary *fullMedia = [@{@"url": publicURL, @"path": key, @"name": objName,
+                                                    @"size": @(fileData.length), @"uploadedAt": [[self class] isoNow], @"type": type} mutableCopy];
+                for (NSString *k in @[@"mediaSignature", @"owner", @"mediaId", @"id", @"folder"]) {
+                    id v = data[k];
+                    if ([v isKindOfClass:[NSString class]] && ((NSString *)v).length > 0) { fullMedia[k] = v; }
+                }
+                mediaInfo = fullMedia;
             }
-            NSDictionary *mediaInfo = @{@"url": publicURL, @"path": key, @"name": objName,
-                                        @"size": @(fileData.length), @"uploadedAt": [[self class] isoNow], @"type": type};
-            // Production-issued grant extras the payload builder may require.
-            // Sent BOTH inside mediaInfo and top-level: the server half of this
-            // contract isn't public, and either location must validate.
-            // (mediaId in particular: the web keys queue items off it.)
-            NSMutableDictionary *fullMedia = [mediaInfo mutableCopy];
-            for (NSString *k in @[@"mediaSignature", @"owner", @"mediaId", @"id", @"folder"]) {
-                id v = data[k];
-                if ([v isKindOfClass:[NSString class]] && ((NSString *)v).length > 0) { fullMedia[k] = v; }
-            }
-            mediaInfo = fullMedia;
             NSString *aud = ([audience isKindOfClass:[NSString class]] && audience.length) ? audience : @"all";
-            NSMutableDictionary *options = [@{@"caption": caption ?: @"", @"overlay_id": @"standard", @"type": @"default",
-                                              @"icon": @"", @"text_color": @"#FFFFFF", @"color_top": @"", @"color_bottom": @"",
-                                              @"audience": aud, @"recipients": @[], @"music": @""} mutableCopy];
+            // optionsData mirrors the web queue item (overlay defaults +
+            // audience/recipients). Key name matters: the builder reads
+            // `optionsData`, not `options`.
+            NSMutableDictionary *optionsData = [@{@"overlay_id": @"standard", @"caption": caption ?: @"", @"text": @"",
+                                                   @"text_color": @"#FFFFFF", @"icon": @"", @"type": @"default",
+                                                   @"background": @{@"colors": @[]}, @"payload": @{},
+                                                   @"audience": aud, @"recipients": @[]} mutableCopy];
+            optionsData[@"filter_id"] = [NSNull null];
             if ([extra isKindOfClass:[NSDictionary class]]) {
-                for (id k in extra) { if ([k isKindOfClass:[NSString class]]) options[k] = extra[k] ?: @""; }
+                for (NSString *k in @[@"overlay_id", @"type", @"icon", @"text_color", @"color_top", @"color_bottom", @"music"]) {
+                    id v = extra[k];
+                    if ([v isKindOfClass:[NSString class]] && ((NSString *)v).length > 0) optionsData[k] = v;
+                }
+                id r = extra[@"recipients"];
+                if ([r isKindOfClass:[NSArray class]]) optionsData[@"recipients"] = r;
             }
             dispatch_async(dispatch_get_main_queue(), ^{
                 if ([[LDConfig backendMode] isEqualToString:@"original"]) {
@@ -648,7 +698,7 @@ static NSString * const kLDClientVersion = @"iOS1.0";
                     if (progress) progress(@"3/3 asking Dio to build the payload…");
                     NSString *mt = [[NSUserDefaults standardUserDefaults] stringForKey:kLDKeyMemberToken];
                     NSString *member = ([mt isKindOfClass:[NSString class]] && mt.length) ? @"member:yes" : @"member:NO";
-                    [self createMomentPayloadWithMediaInfo:mediaInfo options:options contentType:type completion:^(NSDictionary *json, NSError *error) {
+                    [self createMomentPayloadWithMediaInfo:mediaInfo options:optionsData contentType:type completion:^(NSDictionary *json, NSError *error) {
                         if (error) {
                             completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-4 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"step 3/3 (Dio payload, %@): %@", member, error.localizedDescription]}]);
                             return;
@@ -668,13 +718,19 @@ static NSString * const kLDClientVersion = @"iOS1.0";
                                 completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-5 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"step 4/4 (Locket): %@", e2.localizedDescription]}]);
                                 return;
                             }
+                            // Best-effort: tell Dio the payload was consumed
+                            // (web `markMomentPayloadAsUsed`), keyed off mediaId.
+                            id mid = [mediaInfo isKindOfClass:[NSDictionary class]] ? mediaInfo[@"mediaId"] : nil;
+                            if ([mid isKindOfClass:[NSString class]] && ((NSString *)mid).length > 0) {
+                                [self POST:@"/markMomentPayloadAsUsed" body:@{@"data": @{@"momentId": mid}} completion:^(NSDictionary *j3, NSError *e3) {}];
+                            }
                             completion(j2, nil);
                         }];
                     }];
                     return;
                 }
                 [self POST:@"/postMomentV2" body:@{@"model": @"Version-UploadmediaV3.1", @"mediaInfo": mediaInfo,
-                                                   @"options": options, @"contentType": type} completion:completion];
+                                                   @"options": optionsData, @"contentType": type} completion:completion];
             });
         }];
         [up resume];
@@ -710,16 +766,10 @@ static NSString * const kLDClientVersion = @"iOS1.0";
                             contentType:(NSString *)type
                              completion:(LDJSONCompletion)completion {
     // Production step: POST {api}/locket/createMomentPayloadV2 -> {payload}.
-    // Grant extras ride inside mediaInfo AND top-level (server contract half
-    // is unpublished; either location must validate).
-    NSMutableDictionary *body = [@{@"model": @"Version-UploadmediaV3.1", @"mediaInfo": mediaInfo ?: @{},
-                 @"options": options ?: @{}, @"contentType": type ?: @"image"} mutableCopy];
-    if ([mediaInfo isKindOfClass:[NSDictionary class]]) {
-        for (NSString *k in @[@"mediaSignature", @"owner", @"mediaId", @"id", @"folder"]) {
-            id v = mediaInfo[k];
-            if ([v isKindOfClass:[NSString class]] && ((NSString *)v).length > 0) body[k] = v;
-        }
-    }
+    // Body is the web queue item verbatim: {model, mediaInfo, contentType,
+    // optionsData} — the builder reads `optionsData`, not `options`.
+    NSDictionary *body = @{@"model": @"Version-UploadmediaV3.1", @"mediaInfo": mediaInfo ?: @{},
+                 @"contentType": type ?: @"image", @"optionsData": options ?: @{}};
     [self POST:@"/createMomentPayloadV2" body:body completion:completion];
 }
 

@@ -63,11 +63,12 @@
 }
 + (NSDictionary *)dioHeaders {
     // Same public headers the web client sends on every call (axios.main.js).
+    // Values must track the live web app or the API gates us as outdated.
     return @{@"x-api-key": kLDDioPublicAPIKey,
              @"x-app-author": @"dio",
              @"x-app-name": @"locketdio",
-             @"x-app-client": @"iOS1.0",
-             @"x-app-api": @"v2.2.1",
+             @"x-app-client": @"Beta1.7.7",
+             @"x-app-api": @"v2.5.5",
              @"x-app-env": @"production"};
 }
 @end
