@@ -460,10 +460,25 @@ static NSString * const kLDClientVersion = @"iOS1.0";
                             progress:(LDProgressBlock)progress
                           completion:(LDJSONCompletion)completion {
         NSString *putURL = [data[@"url"] isKindOfClass:[NSString class]] ? data[@"url"] : nil;
-        NSString *publicURL = [data[@"publicURL"] isKindOfClass:[NSString class]] ? data[@"publicURL"] : nil;
+        // Production field names have drifted before; accept known variants.
+        NSString *publicURL = nil;
+        for (NSString *k in @[@"publicURL", @"public_url", @"downloadURL", @"download_url", @"fileUrl", @"file_url"]) {
+            id v = data[k];
+            if ([v isKindOfClass:[NSString class]] && ((NSString *)v).length > 0) { publicURL = v; break; }
+        }
         NSString *key = [data[@"key"] isKindOfClass:[NSString class]] ? data[@"key"] : nil;
         if (!putURL.length || !publicURL.length || !key.length) {
-            completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-2 userInfo:@{NSLocalizedDescriptionKey: @"Upload failed at step 1/3 (bad presigned response)"}]);
+            // Report the actual payload (truncated) so a field rename is diagnosable on-screen.
+            NSString *dump = @"{}";
+            NSData *jd = [NSJSONSerialization dataWithJSONObject:data options:0 error:nil];
+            if (jd.length) {
+                dump = [[NSString alloc] initWithData:jd encoding:NSUTF8StringEncoding] ?: @"{}";
+                if (dump.length > 400) dump = [[dump substringToIndex:400] stringByAppendingString:@"…"];
+            }
+            NSLog(@"presigned response missing fields. putURL=%@ publicURL=%@ key=%@ raw=%@", putURL, publicURL, key, dump);
+            NSString *msg = [NSString stringWithFormat:@"Upload failed at step 1/3 (presigned reply lacks %@). Got: %@",
+                (!putURL.length ? @"put-url" : (!key.length ? @"key" : @"public-url")), dump];
+            completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-2 userInfo:@{NSLocalizedDescriptionKey: msg}]);
             return;
         }
         // Step 2/3: PUT raw bytes (mirrors StorageServices fetch PUT).
