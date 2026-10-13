@@ -38,6 +38,15 @@
     for (NSString *k in [LDConfig dioHeaders]) {
         [req setValue:[LDConfig dioHeaders][k] forHTTPHeaderField:k];
     }
+    // Member session (production): every Dio request also carries the member
+    // token under its header (default X-LocketDio-Member). Without it the API
+    // rejects even valid Bearer calls — the classic "auth state" failure.
+    NSString *mt = [[NSUserDefaults standardUserDefaults] stringForKey:kLDKeyMemberToken];
+    if ([mt isKindOfClass:[NSString class]] && mt.length > 0) {
+        NSString *mh = [[NSUserDefaults standardUserDefaults] stringForKey:kLDKeyMemberHeader];
+        if (![mh isKindOfClass:[NSString class]] || !mh.length) mh = kLDDefaultMemberHeader;
+        [req setValue:mt forHTTPHeaderField:mh];
+    }
 }
 
 - (void)POST:(NSString *)path body:(nullable NSDictionary *)body completion:(LDJSONCompletion)completion {
@@ -123,6 +132,10 @@
             if ([nr isKindOfClass:[NSString class]] && nr.length > 0) {
                 [[NSUserDefaults standardUserDefaults] setObject:nr forKey:kLDKeyRefreshToken];
             }
+            NSString *nu = data[@"user_id"];
+            if ([nu isKindOfClass:[NSString class]] && nu.length > 0) {
+                [[NSUserDefaults standardUserDefaults] setObject:nu forKey:kLDKeyUserID];
+            }
             [[NSUserDefaults standardUserDefaults] synchronize];
             retry();
         } else {
@@ -139,7 +152,17 @@
     if ([[LDConfig backendMode] isEqualToString:@"original"]) {
         NSString *u = [[LDConfig authBaseURL] stringByAppendingString:@"/locket/loginV2"];
         [self POSTURL:u body:@{@"email": email ?: @"", @"password": password ?: @"", @"captchaToken": @""} completion:^(NSDictionary *json, NSInteger status, NSError *err) {
-            [self finishLoginWithJSON:json error:err completion:completion];
+            [self finishLoginWithJSON:json error:err completion:^(NSDictionary *j2, NSError *e2) {
+                // Production calls also need the member session (/api/me);
+                // fetch it before entering the app so data calls don't 401.
+                if (!e2 && self.idToken.length > 0) {
+                    [self fetchMemberSessionWithCompletion:^(NSDictionary *j3, NSError *e3) {
+                        completion(j2, e2);
+                    }];
+                    return;
+                }
+                completion(j2, e2);
+            }];
         }];
         return;
     }
@@ -215,6 +238,8 @@
         self.idToken = nil;
         [[NSUserDefaults standardUserDefaults] removeObjectForKey:kLDKeyIDToken];
         [[NSUserDefaults standardUserDefaults] removeObjectForKey:kLDKeyRefreshToken];
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:kLDKeyMemberToken];
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:kLDKeyMemberHeader];
         [[NSUserDefaults standardUserDefaults] synchronize];
         completion(json ?: @{}, e);
     }];
@@ -351,6 +376,17 @@ static NSString * const kLDClientVersion = @"iOS1.0";
         completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-1 userInfo:@{NSLocalizedDescriptionKey: @"Cannot read media file"}]);
         return;
     }
+    // Production requires the member session on data calls; repair it if absent.
+    if ([[LDConfig backendMode] isEqualToString:@"original"]) {
+        NSString *mt = [[NSUserDefaults standardUserDefaults] stringForKey:kLDKeyMemberToken];
+        if (![mt isKindOfClass:[NSString class]] || !mt.length) {
+            if (progress) progress(@"Refreshing session…");
+            [self fetchMemberSessionWithCompletion:^(NSDictionary *json, NSError *error) {
+                [self sendMomentOriginalFlowWithFileURL:fileURL isVideo:isVideo caption:caption audience:audience extraOptions:extra progress:progress completion:completion];
+            }];
+            return;
+        }
+    }
     // Mirrors PayloadServices.createRequestPayloadV5 naming.
     NSString *type = isVideo ? @"video" : @"image";
     NSString *mime = isVideo ? @"video/quicktime" : @"image/jpeg";
@@ -363,14 +399,66 @@ static NSString * const kLDClientVersion = @"iOS1.0";
     NSDictionary *preBody = @{@"filename": fileName, @"contentType": mime, @"type": type,
                               @"size": @(fileData.length), @"uploadedAt": uploadedAt};
     if (progress) progress(@"1/3 requesting upload URL…");
+    [self requestUploadGrantWithFilename:fileName contentType:mime type:type size:fileData.length uploadedAt:uploadedAt completion:^(NSDictionary *predata, NSError *preError) {
+        if (preError || ![predata isKindOfClass:[NSDictionary class]]) {
+            completion(nil, preError ?: [NSError errorWithDomain:@"LocketLegacy" code:-2 userInfo:@{NSLocalizedDescriptionKey: @"Upload failed at step 1/3 (presigned URL)"}]);
+            return;
+        }
+        [self continueOriginalFlowWithGrant:predata fileData:fileData fileName:fileName mime:mime type:type caption:caption audience:audience extra:extra progress:progress completion:completion];
+    }];
+}
+
+- (void)requestUploadGrantWithFilename:(NSString *)fileName
+                           contentType:(NSString *)mime
+                                  type:(NSString *)type
+                                  size:(NSUInteger)size
+                           uploadedAt:(NSString *)isoDate
+                            completion:(void(^)(NSDictionary * _Nullable data, NSError * _Nullable error))completion {
+    NSDictionary *preBody = @{@"filename": fileName ?: @"", @"contentType": mime ?: @"", @"type": type ?: @"",
+                              @"size": @(size), @"uploadedAt": isoDate ?: @""};
     NSArray<NSString *> *hosts = [self storageBaseCandidates];
     __block NSInteger hi = 0;
     __block void (^tryNext)(NSError *lastErr);
-    void (^finishPre)(NSDictionary *, NSError *) = ^(NSDictionary *data, NSError *err) {
-        if (err || ![data isKindOfClass:[NSDictionary class]]) {
-            completion(nil, err ?: [NSError errorWithDomain:@"LocketLegacy" code:-2 userInfo:@{NSLocalizedDescriptionKey: @"Upload failed at step 1/3 (presigned URL)"}]);
+    tryNext = ^(NSError *lastErr) {
+        if (hi >= hosts.count) {
+            completion(nil, lastErr ?: [NSError errorWithDomain:@"LocketLegacy" code:-2 userInfo:@{NSLocalizedDescriptionKey: @"Upload failed at step 1/3 (presigned URL)"}]);
             return;
         }
+        NSString *u = [hosts[hi++] stringByAppendingString:@"/api/presignedV3"];
+        [self POSTURL:u body:preBody completion:^(NSDictionary *json, NSInteger status, NSError *error) {
+            NSDictionary *data = [json isKindOfClass:[NSDictionary class]] ? json[@"data"] : nil;
+            BOOL ok = !error && [json[@"status"] isKindOfClass:[NSString class]] &&
+                      [json[@"status"] isEqualToString:@"success"] && [data isKindOfClass:[NSDictionary class]];
+            if (ok) { completion(data, nil); return; }
+            NSString *msg = @"";
+            if ([json isKindOfClass:[NSDictionary class]]) {
+                id m = json[@"message"];
+                if ([m isKindOfClass:[NSString class]] && ((NSString *)m).length) msg = m;
+                else {
+                    id eobj = json[@"error"];
+                    if ([eobj isKindOfClass:[NSDictionary class]] && [eobj[@"message"] isKindOfClass:[NSString class]]) {
+                        msg = [NSString stringWithFormat:@"%@: %@", eobj[@"code"] ?: @"error", eobj[@"message"]];
+                    }
+                }
+            }
+            if (!msg.length) msg = error ? error.localizedDescription : [NSString stringWithFormat:@"%@ → HTTP %ld", u, (long)status];
+            else msg = [NSString stringWithFormat:@"%@ → %@", u, msg];
+            tryNext([NSError errorWithDomain:@"LocketLegacy" code:-2 userInfo:@{NSLocalizedDescriptionKey: msg}]);
+        }];
+    };
+    tryNext(nil);
+}
+
+- (void)continueOriginalFlowWithGrant:(NSDictionary *)data
+                            fileData:(NSData *)fileData
+                            fileName:(NSString *)fileName
+                                mime:(NSString *)mime
+                                type:(NSString *)type
+                             caption:(NSString *)caption
+                            audience:(NSString *)audience
+                               extra:(NSDictionary *)extra
+                            progress:(LDProgressBlock)progress
+                          completion:(LDJSONCompletion)completion {
         NSString *putURL = [data[@"url"] isKindOfClass:[NSString class]] ? data[@"url"] : nil;
         NSString *publicURL = [data[@"publicURL"] isKindOfClass:[NSString class]] ? data[@"publicURL"] : nil;
         NSString *key = [data[@"key"] isKindOfClass:[NSString class]] ? data[@"key"] : nil;
@@ -476,6 +564,35 @@ static NSString * const kLDClientVersion = @"iOS1.0";
                                 options:(NSDictionary *)options
                             contentType:(NSString *)type
                              completion:(LDJSONCompletion)completion {
+    // Production step: POST {api}/locket/createMomentPayloadV2 -> {payload}.
+    [self POST:@"/createMomentPayloadV2"
+          body:@{@"model": @"Version-UploadmediaV3.1", @"mediaInfo": mediaInfo ?: @{},
+                 @"options": options ?: @{}, @"contentType": type ?: @"image"}
+    completion:completion];
+}
+
+- (void)fetchMemberSessionWithCompletion:(LDJSONCompletion)completion {
+    NSString *u = [[LDConfig effectiveBaseAPIURL] stringByAppendingString:@"/api/me"];
+    [self GETURL:u retried:NO completion:^(NSDictionary *json, NSInteger status, NSError *e) {
+        if (!e && [json isKindOfClass:[NSDictionary class]]) {
+            id data = json[@"data"];
+            if (![data isKindOfClass:[NSDictionary class]]) data = json;
+            id session = [data isKindOfClass:[NSDictionary class]] ? data[@"session"] : nil;
+            if (![session isKindOfClass:[NSDictionary class]]) session = data;
+            NSString *tok = [session isKindOfClass:[NSDictionary class]] ? session[@"member_token"] : nil;
+            if (![tok isKindOfClass:[NSString class]]) {
+                tok = [data isKindOfClass:[NSDictionary class]] ? data[@"member_token"] : nil;
+            }
+            if ([tok isKindOfClass:[NSString class]] && tok.length > 0) {
+                [[NSUserDefaults standardUserDefaults] setObject:tok forKey:kLDKeyMemberToken];
+                NSString *h = [session isKindOfClass:[NSDictionary class]] ? session[@"header"] : nil;
+                [[NSUserDefaults standardUserDefaults] setObject:([h isKindOfClass:[NSString class]] && h.length ? h : kLDDefaultMemberHeader) forKey:kLDKeyMemberHeader];
+                [[NSUserDefaults standardUserDefaults] synchronize];
+            }
+        }
+        completion(json, e);
+    }];
+}
     // Production step: POST {api}/locket/createMomentPayloadV2 -> {payload}.
     [self POST:@"/createMomentPayloadV2"
           body:@{@"model": @"Version-UploadmediaV3.1", @"mediaInfo": mediaInfo ?: @{},

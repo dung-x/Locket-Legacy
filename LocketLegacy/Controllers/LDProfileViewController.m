@@ -80,7 +80,10 @@
 
 - (void)renderBackend {
     if ([[LDConfig backendMode] isEqualToString:@"original"]) {
-        self.backendLabel.text = @"Backend: Original Locket Dio API\nhttps://api.locket-dio.com";
+        NSString *mt = [[NSUserDefaults standardUserDefaults] stringForKey:kLDKeyMemberToken];
+        NSString *member = ([mt isKindOfClass:[NSString class]] && mt.length) ? @"member session ✅" : @"member session ❌ (log in again)";
+        self.backendLabel.text = [NSString stringWithFormat:@"Backend: Original Locket Dio API\nhttps://api.locket-dio.com\n%@",
+            member];
     } else {
         self.backendLabel.text = [NSString stringWithFormat:@"Backend: Self-host Docker\n%@", [LDConfig baseAPIURL]];
     }

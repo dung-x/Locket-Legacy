@@ -18,6 +18,9 @@ static NSString * const kLDKeyUserEmail    = @"LDUserEmail";
 static NSString * const kLDKeyPushEnabled  = @"LDPushEnabled";
 static NSString * const kLDKeyCameraTheme  = @"LDCameraTheme"; // gold | violet | ocean
 static NSString * const kLDKeyBackendMode  = @"LDBackendMode"; // selfhost | original
+static NSString * const kLDKeyMemberToken  = @"LDMemberToken";
+static NSString * const kLDKeyMemberHeader = @"LDMemberHeader";
+static NSString * const kLDDefaultMemberHeader = @"X-LocketDio-Member";
 
 // Original project endpoints (Client-Locket-Dio web .env defaults).
 static NSString * const kLDOriginalBaseAPIURL    = @"https://api.locket-dio.com";

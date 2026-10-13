@@ -33,6 +33,15 @@ typedef void (^LDJSONCompletion)(NSDictionary * _Nullable json, NSError * _Nulla
 
 typedef void (^LDProgressBlock)(NSString *stage);
 
+// Step 1 of the original flow, exposed for diagnostics: asks a storage host
+// for a one-time PUT grant. Completion: presigned data dict or error.
+- (void)requestUploadGrantWithFilename:(NSString *)fileName
+                           contentType:(NSString *)mime
+                                  type:(NSString *)type
+                                  size:(NSUInteger)size
+                           uploadedAt:(NSString *)isoDate
+                            completion:(void(^)(NSDictionary * _Nullable data, NSError * _Nullable error))completion;
+
 // Social / extras (mirror upstream UX on self-host)
 - (void)getOverlaysWithCompletion:(LDJSONCompletion)completion;
 - (void)reactToMoment:(NSString *)momentId emoji:(NSString *)emoji completion:(LDJSONCompletion)completion;
@@ -41,6 +50,10 @@ typedef void (^LDProgressBlock)(NSString *stage);
                                 options:(NSDictionary *)options
                             contentType:(NSString *)type
                              completion:(LDJSONCompletion)completion;
+// Production member session: GET {api}/api/me -> session {member_token, header}.
+// Must run after login (and when the token exists but member is missing);
+// the member header rides on every Dio call via applyDioHeaders.
+- (void)fetchMemberSessionWithCompletion:(LDJSONCompletion)completion;
 - (void)sendMessageWithText:(NSString *)text completion:(LDJSONCompletion)completion;
 - (void)registerPushToken:(NSString *)token completion:(LDJSONCompletion)completion;
 
