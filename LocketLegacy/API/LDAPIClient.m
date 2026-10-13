@@ -13,11 +13,6 @@
 - (BOOL)needsRefreshForJSON:(NSDictionary *)json status:(NSInteger)code;
 - (BOOL)tryRefreshThen:(void(^)(void))retry;
 - (void)finishLoginWithJSON:(NSDictionary *)json error:(NSError *)err completion:(LDJSONCompletion)completion;
-- (void)postOriginalStep3WithMediaInfo:(NSDictionary *)mediaInfo
-                              options:(NSDictionary *)options
-                                 type:(NSString *)type
-                             progress:(LDProgressBlock)progress
-                           completion:(LDJSONCompletion)completion;
 - (void)postOfficialMomentWithPayload:(NSDictionary *)payload retried:(BOOL)retried completion:(LDJSONCompletion)completion;
 @end
 
@@ -590,46 +585,42 @@ static NSString * const kLDClientVersion = @"iOS1.0";
             if ([extra isKindOfClass:[NSDictionary class]]) {
                 for (id k in extra) { if ([k isKindOfClass:[NSString class]]) options[k] = extra[k] ?: @""; }
             }
-            [self postOriginalStep3WithMediaInfo:mediaInfo options:options type:type progress:progress completion:completion];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if ([[LDConfig backendMode] isEqualToString:@"original"]) {
+                    // Production: Dio builds the official payload, then it goes
+                    // straight to Locket (markMomentPayloadAsUsed is best-effort
+                    // and skipped — no Dio-side moment id is available here).
+                    if (progress) progress(@"3/3 asking Dio to build the payload…");
+                    [self createMomentPayloadWithMediaInfo:mediaInfo options:options contentType:type completion:^(NSDictionary *json, NSError *error) {
+                        if (error) {
+                            completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-4 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"step 3/3 (Dio payload): %@", error.localizedDescription]}]);
+                            return;
+                        }
+                        id payload = json[@"payload"];
+                        if (!payload) {
+                            // Surface Dio's own reason (code + message) verbatim.
+                            NSString *m = json[@"message"];
+                            if (![m isKindOfClass:[NSString class]]) m = json[@"error"];
+                            if (![m isKindOfClass:[NSString class]] || !((NSString *)m).length) m = @"Dio built no payload";
+                            completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-4 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"step 3/3 (Dio payload): %@", m]}]);
+                            return;
+                        }
+                        if (progress) progress(@"4/4 posting to Locket…");
+                        [self postOfficialMomentWithPayload:payload completion:^(NSDictionary *j2, NSError *e2) {
+                            if (e2) {
+                                completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-5 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"step 4/4 (Locket): %@", e2.localizedDescription]}]);
+                                return;
+                            }
+                            completion(j2, nil);
+                        }];
+                    }];
+                    return;
+                }
+                [self POST:@"/postMomentV2" body:@{@"model": @"Version-UploadmediaV3.1", @"mediaInfo": mediaInfo,
+                                                   @"options": options, @"contentType": type} completion:completion];
+            });
         }];
         [up resume];
-}
-
-- (void)postOriginalStep3WithMediaInfo:(NSDictionary *)mediaInfo
-                               options:(NSDictionary *)options
-                                  type:(NSString *)type
-                              progress:(LDProgressBlock)progress
-                            completion:(LDJSONCompletion)completion {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if ([[LDConfig backendMode] isEqualToString:@"original"]) {
-            if (progress) progress(@"3/3 asking Dio to build the payload…");
-            [self createMomentPayloadWithMediaInfo:mediaInfo options:options contentType:type completion:^(NSDictionary *json, NSError *error) {
-                if (error) {
-                    completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-4 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"step 3/3 (Dio payload): %@", error.localizedDescription]}]);
-                    return;
-                }
-                id payload = json[@"payload"];
-                if (!payload) {
-                    NSString *m = json[@"message"];
-                    if (![m isKindOfClass:[NSString class]]) m = json[@"error"];
-                    if (![m isKindOfClass:[NSString class]] || !((NSString *)m).length) m = @"Dio built no payload";
-                    completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-4 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"step 3/3 (Dio payload): %@", m]}]);
-                    return;
-                }
-                if (progress) progress(@"4/4 posting to Locket…");
-                [self postOfficialMomentWithPayload:payload completion:^(NSDictionary *j2, NSError *e2) {
-                    if (e2) {
-                        completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-5 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"step 4/4 (Locket): %@", e2.localizedDescription]}]);
-                        return;
-                    }
-                    completion(j2, nil);
-                });
-            }];
-            return;
-        }
-        [self POST:@"/postMomentV2" body:@{@"model": @"Version-UploadmediaV3.1", @"mediaInfo": mediaInfo,
-                                           @"options": options, @"contentType": type} completion:completion];
-    });
 }
 
 #pragma mark - Social / extras
