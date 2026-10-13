@@ -569,12 +569,6 @@ static NSString * const kLDClientVersion = @"iOS1.0";
         completion(json, e);
     }];
 }
-    // Production step: POST {api}/locket/createMomentPayloadV2 -> {payload}.
-    [self POST:@"/createMomentPayloadV2"
-          body:@{@"model": @"Version-UploadmediaV3.1", @"mediaInfo": mediaInfo ?: @{},
-                 @"options": options ?: @{}, @"contentType": type ?: @"image"}
-    completion:completion];
-}
 
 - (void)sendMessageWithText:(NSString *)text completion:(LDJSONCompletion)completion {
     [self POST:@"/sendMessage" body:@{@"text": text ?: @""} completion:completion];
