@@ -29,7 +29,7 @@
     NSString *img = [self str:json[@"image_url"]];
     if (!img.length) img = [self str:json[@"url"]];
     if (!img.length && [json[@"mediaInfo"] isKindOfClass:[NSDictionary class]]) img = [self str:json[@"mediaInfo"][@"url"]];
-    if (!img.length && [json[@"media"] isKindOfClass:[NSDictionary class]]) img = [self str:json[@"media"][@"url]];
+    if (!img.length && [json[@"media"] isKindOfClass:[NSDictionary class]]) img = [self str:json[@"media"][@"url"]];
     NSString *vid = [self str:json[@"video_url"]];
     NSString *thumb = [self str:json[@"thumbnail_url"]];
     img = [self cdnURL:[self absURL:img]];
