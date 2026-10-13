@@ -490,10 +490,11 @@ static NSString * const kLDClientVersion = @"iOS1.0";
         return;
     }
     // Production requires the member session on data calls; repair it if absent.
+    // Its presence is reported so a missing one is visible, not cryptic.
     if ([[LDConfig backendMode] isEqualToString:@"original"]) {
         NSString *mt = [[NSUserDefaults standardUserDefaults] stringForKey:kLDKeyMemberToken];
         if (![mt isKindOfClass:[NSString class]] || !mt.length) {
-            if (progress) progress(@"Refreshing session…");
+            if (progress) progress(@"Refreshing session (no member token)…");
             [self fetchMemberSessionWithCompletion:^(NSDictionary *json, NSError *error) {
                 [self sendMomentOriginalFlowWithFileURL:fileURL isVideo:isVideo caption:caption audience:audience extraOptions:extra progress:progress completion:completion];
             }];
@@ -621,10 +622,12 @@ static NSString * const kLDClientVersion = @"iOS1.0";
             NSDictionary *mediaInfo = @{@"url": publicURL, @"path": key, @"name": objName,
                                         @"size": @(fileData.length), @"uploadedAt": [[self class] isoNow], @"type": type};
             // Production-issued grant extras the payload builder may require.
+            // Sent BOTH inside mediaInfo and top-level: the server half of this
+            // contract isn't public, and either location must validate.
             NSMutableDictionary *fullMedia = [mediaInfo mutableCopy];
             for (NSString *k in @[@"mediaSignature", @"owner"]) {
                 id v = data[k];
-                if ([v isKindOfClass:[NSString class]] && ((NSString *)v).length > 0) fullMedia[k] = v;
+                if ([v isKindOfClass:[NSString class]] && ((NSString *)v).length > 0) { fullMedia[k] = v; }
             }
             mediaInfo = fullMedia;
             NSString *aud = ([audience isKindOfClass:[NSString class]] && audience.length) ? audience : @"all";
@@ -702,10 +705,17 @@ static NSString * const kLDClientVersion = @"iOS1.0";
                             contentType:(NSString *)type
                              completion:(LDJSONCompletion)completion {
     // Production step: POST {api}/locket/createMomentPayloadV2 -> {payload}.
-    [self POST:@"/createMomentPayloadV2"
-          body:@{@"model": @"Version-UploadmediaV3.1", @"mediaInfo": mediaInfo ?: @{},
-                 @"options": options ?: @{}, @"contentType": type ?: @"image"}
-    completion:completion];
+    // Grant extras ride inside mediaInfo AND top-level (server contract half
+    // is unpublished; either location must validate).
+    NSMutableDictionary *body = [@{@"model": @"Version-UploadmediaV3.1", @"mediaInfo": mediaInfo ?: @{},
+                 @"options": options ?: @{}, @"contentType": type ?: @"image"} mutableCopy];
+    if ([mediaInfo isKindOfClass:[NSDictionary class]]) {
+        for (NSString *k in @[@"mediaSignature", @"owner"]) {
+            id v = mediaInfo[k];
+            if ([v isKindOfClass:[NSString class]] && ((NSString *)v).length > 0) body[k] = v;
+        }
+    }
+    [self POST:@"/createMomentPayloadV2" body:body completion:completion];
 }
 
 - (void)postOfficialMomentWithPayload:(NSDictionary *)payload completion:(LDJSONCompletion)completion {
