@@ -3,6 +3,7 @@
 #import "LDPreviewViewController.h"
 #import "../API/LDAPIClient.h"
 #import "../API/LDDiskCache.h"
+#import "../Config.h"
 #import "../Models/LDOverlay.h"
 #import "../Models/LDFriend.h"
 #import <AVFoundation/AVFoundation.h>
@@ -419,6 +420,24 @@
     return [NSURL fileURLWithPath:p];
 }
 
+// Video poster for the server thumbnail (official video posts require one).
+- (NSURL *)stagedThumbnailURLForVideo:(NSURL *)videoURL {
+    if (!videoURL) return nil;
+    AVAsset *asset = [AVAsset assetWithURL:videoURL];
+    AVAssetImageGenerator *gen = [AVAssetImageGenerator assetImageGeneratorWithAsset:asset];
+    gen.appliesPreferredTrackTransform = YES;
+    gen.maximumSize = CGSizeMake(512, 512);
+    CGImageRef cg = [gen copyCGImageAtTime:kCMTimeZero actualTime:NULL error:nil];
+    if (!cg) return nil;
+    UIImage *img = [UIImage imageWithCGImage:cg];
+    CGImageRelease(cg);
+    if (!img) return nil;
+    NSString *p = [NSTemporaryDirectory() stringByAppendingPathComponent:@"thumb.jpg"];
+    NSData *d = UIImageJPEGRepresentation(img, 0.8);
+    if (![d writeToFile:p atomically:YES]) return nil;
+    return [NSURL fileURLWithPath:p];
+}
+
 - (void)onSend {
     [self.view endEditing:YES];
     [self.musicPlayer pause];
@@ -436,16 +455,38 @@
                             @"music": [self.musicField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] ?: @"",
                             @"recipients": [self.selectedIds allObjects]};
     self.sendButton.enabled = NO;
-    self.statusLabel.text = @"Sending (original 3-step method)…";
-    [[LDAPIClient shared] sendMomentOriginalFlowWithFileURL:file
-                                                    isVideo:isVideo
-                                                    caption:caption
-                                                   audience:audience
-                                               extraOptions:extra
-                                                   progress:^(NSString *stage) {
-                                                       self.statusLabel.text = stage;
-                                                   }
-                                                 completion:^(NSDictionary *json, NSError *error) {
+    if ([[LDConfig backendMode] isEqualToString:@"original"]) {
+        // Original production chain: presigned PUT -> createMomentPayloadV2 -> official post.
+        self.statusLabel.text = @"Sending (original method)…";
+        [[LDAPIClient shared] sendMomentOriginalFlowWithFileURL:file
+                                                        isVideo:isVideo
+                                                        caption:caption
+                                                       audience:audience
+                                                   extraOptions:extra
+                                                       progress:^(NSString *stage) {
+                                                           self.statusLabel.text = stage;
+                                                       }
+                                                     completion:^(NSDictionary *json, NSError *error) {
+            [self finishSendWithJSON:json error:error file:file isVideo:isVideo caption:caption audience:audience];
+        }];
+        return;
+    }
+    // Self-host bridge: direct multipart upload (file + thumbnail + optionsData);
+    // the server runs the official Firebase/payload chain itself.
+    self.statusLabel.text = @"Uploading to self-host…";
+    NSURL *thumb = isVideo ? [self stagedThumbnailURLForVideo:file] : nil;
+    [[LDAPIClient shared] postMomentV1WithFileURL:file
+                                          isVideo:isVideo
+                                     thumbnailURL:thumb
+                                          caption:caption
+                                         audience:audience
+                                     extraOptions:extra
+                                       completion:^(NSDictionary *json, NSError *error) {
+        [self finishSendWithJSON:json error:error file:file isVideo:isVideo caption:caption audience:audience];
+    }];
+}
+
+- (void)finishSendWithJSON:(NSDictionary *)json error:(NSError *)error file:(NSURL *)file isVideo:(BOOL)isVideo caption:(NSString *)caption audience:(NSString *)audience {
         if (error) {
             // Offline/failed → stage to outbox for retry (mirrors upload queue).
             NSDictionary *item = [LDDiskCache stageOutboxItemWithFileURL:file isVideo:isVideo caption:caption audience:audience];
@@ -481,7 +522,6 @@
             if (![msg isKindOfClass:[NSString class]] || !msg.length) msg = @"Upload failed.";
             self.statusLabel.text = msg;
         }
-    }];
 }
 
 @end

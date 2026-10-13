@@ -1,9 +1,11 @@
 #import "LDFeedViewController.h"
 #import "../API/LDAPIClient.h"
 #import "../API/LDDiskCache.h"
+#import "../Config.h"
 #import "../Models/LDMoment.h"
 #import "../Views/LDMomentCell.h"
 #import "LDDetailViewController.h"
+#import <AVFoundation/AVFoundation.h>
 
 @interface LDFeedViewController () <UICollectionViewDataSource, UICollectionViewDelegateFlowLayout>
 @property (nonatomic, strong) UICollectionView *grid;
@@ -99,13 +101,8 @@
     NSString *itemId = item[@"id"];
     NSURL *file = [NSURL fileURLWithPath:item[@"filePath"]];
     NSString *aud = [item[@"audience"] isKindOfClass:[NSString class]] ? item[@"audience"] : @"all";
-    [[LDAPIClient shared] sendMomentOriginalFlowWithFileURL:file
-                                                    isVideo:[item[@"isVideo"] boolValue]
-                                                    caption:item[@"caption"] ?: @""
-                                                   audience:aud
-                                               extraOptions:nil
-                                                   progress:nil
-                                                 completion:^(NSDictionary *json, NSError *error) {
+    BOOL isVideo = [item[@"isVideo"] boolValue];
+    void (^done)(NSDictionary *, NSError *) = ^(NSDictionary *json, NSError *error) {
         if (!error && [json[@"success"] boolValue]) {
             [LDDiskCache markOutboxSent:itemId error:nil];
         } else {
@@ -113,7 +110,39 @@
         }
         if (rest.count) [self sendOutboxItem:rest.firstObject rest:[rest subarrayWithRange:NSMakeRange(1, rest.count - 1)]];
         else { [self updateOutbox]; [self load]; }
-    }];
+    };
+    if ([[LDConfig backendMode] isEqualToString:@"original"]) {
+        [[LDAPIClient shared] sendMomentOriginalFlowWithFileURL:file
+                                                        isVideo:isVideo
+                                                        caption:item[@"caption"] ?: @""
+                                                       audience:aud
+                                                   extraOptions:nil
+                                                       progress:nil
+                                                     completion:done];
+        return;
+    }
+    NSURL *thumb = nil;
+    if (isVideo) {
+        AVAsset *asset = [AVAsset assetWithURL:file];
+        AVAssetImageGenerator *gen = [AVAssetImageGenerator assetImageGeneratorWithAsset:asset];
+        gen.appliesPreferredTrackTransform = YES;
+        gen.maximumSize = CGSizeMake(512, 512);
+        CGImageRef cg = [gen copyCGImageAtTime:kCMTimeZero actualTime:NULL error:nil];
+        if (cg) {
+            UIImage *img = [UIImage imageWithCGImage:cg];
+            CGImageRelease(cg);
+            NSData *d = UIImageJPEGRepresentation(img, 0.8);
+            NSString *p = [NSTemporaryDirectory() stringByAppendingPathComponent:@"retry-thumb.jpg"];
+            if ([d writeToFile:p atomically:YES]) thumb = [NSURL fileURLWithPath:p];
+        }
+    }
+    [[LDAPIClient shared] postMomentV1WithFileURL:file
+                                          isVideo:isVideo
+                                     thumbnailURL:thumb
+                                          caption:item[@"caption"] ?: @""
+                                         audience:aud
+                                     extraOptions:nil
+                                       completion:done];
 }
 
 - (void)load {

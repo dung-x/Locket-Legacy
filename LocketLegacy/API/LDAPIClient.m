@@ -279,31 +279,80 @@
     [self POST:@"/getAllMessageV2" body:@{} completion:completion];
 }
 
-- (void)postMomentV1WithFileURL:(NSURL *)fileURL isVideo:(BOOL)isVideo caption:(NSString *)caption completion:(LDJSONCompletion)completion {
+- (void)postMomentV1WithFileURL:(NSURL *)fileURL
+                       isVideo:(BOOL)isVideo
+                  thumbnailURL:(NSURL *)thumbnailURL
+                       caption:(NSString *)caption
+                      audience:(NSString *)audience
+                  extraOptions:(NSDictionary *)extra
+                    completion:(LDJSONCompletion)completion {
     NSString *urlStr = [[self baseURL] stringByAppendingString:@"/postMomentV1"];
     NSString *boundary = @"----LocketLegacyBoundary1234";
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:urlStr]];
     req.HTTPMethod = @"POST";
     [req setValue:[NSString stringWithFormat:@"multipart/form-data; boundary=%@", boundary] forHTTPHeaderField:@"Content-Type"];
+    [self applyDioHeaders:req];
     if (self.idToken.length > 0) {
         [req setValue:[NSString stringWithFormat:@"Bearer %@", self.idToken] forHTTPHeaderField:@"Authorization"];
     }
+    NSMutableDictionary *opts = [@{@"caption": caption ?: @"",
+                                   @"audience": ([audience isKindOfClass:[NSString class]] && audience.length) ? audience : @"all",
+                                   @"recipients": @[]} mutableCopy];
+    if ([extra isKindOfClass:[NSDictionary class]]) {
+        for (id k in extra) { if ([k isKindOfClass:[NSString class]]) opts[k] = extra[k] ?: @""; }
+    }
+    NSData *optsData = [NSJSONSerialization dataWithJSONObject:opts options:0 error:nil];
     NSMutableData *body = [NSMutableData data];
-    NSString *opts = [NSString stringWithFormat:@"{\"caption\":\"%@\"}", [[caption stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""] description]];
-    [body appendData:[[NSString stringWithFormat:@"--%@\r\nContent-Disposition: form-data; name=\"optionsData\"\r\n\r\n%@\r\n", boundary, opts] dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:[[NSString stringWithFormat:@"--%@\r\nContent-Disposition: form-data; name=\"optionsData\"\r\nContent-Type: application/json\r\n\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:optsData ?: [NSData data]];
+    [body appendData:[@"\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
     NSData *fileData = [NSData dataWithContentsOfURL:fileURL];
     if (!fileData) { completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-1 userInfo:@{NSLocalizedDescriptionKey: @"Cannot read media file"}]); return; }
     NSString *fname = isVideo ? @"clip.mp4" : @"photo.jpg";
     NSString *mime = isVideo ? @"video/mp4" : @"image/jpeg";
     [body appendData:[[NSString stringWithFormat:@"--%@\r\nContent-Disposition: form-data; name=\"file\"; filename=\"%@\"\r\nContent-Type: %@\r\n\r\n", boundary, fname, mime] dataUsingEncoding:NSUTF8StringEncoding]];
     [body appendData:fileData];
-    [body appendData:[[NSString stringWithFormat:@"\r\n--%@--\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:[@"\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
+    NSData *thumbData = thumbnailURL ? [NSData dataWithContentsOfURL:thumbnailURL] : nil;
+    if (thumbData.length) {
+        [body appendData:[[NSString stringWithFormat:@"--%@\r\nContent-Disposition: form-data; name=\"thumbnail\"; filename=\"thumb.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding]];
+        [body appendData:thumbData];
+        [body appendData:[@"\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
+    }
+    [body appendData:[[NSString stringWithFormat:@"--%@--\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding]];
     req.HTTPBody = body;
     NSURLSessionDataTask *t = [[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
-        NSDictionary *json = d.length ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : @{};
-        dispatch_async(dispatch_get_main_queue(), ^{ completion(json ?: @{}, e); });
+        NSDictionary *json = (d.length && !e) ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+        if (![json isKindOfClass:[NSDictionary class]]) json = @{};
+        if (!e && [self needsRefreshForJSON:json status:[r isKindOfClass:[NSHTTPURLResponse class]] ? ((NSHTTPURLResponse *)r).statusCode : 0]) {
+            NSString *rt = [[NSUserDefaults standardUserDefaults] stringForKey:kLDKeyRefreshToken];
+            if ([rt isKindOfClass:[NSString class]] && rt.length) {
+                [self refreshToken:rt completion:^(NSDictionary *rj, NSError *re) {
+                    NSDictionary *data = [rj isKindOfClass:[NSDictionary class]] ? rj[@"data"] : nil;
+                    NSString *tok = [data isKindOfClass:[NSDictionary class]] ? (data[@"id_token"] ?: data[@"access_token"]) : nil;
+                    if (!re && [tok isKindOfClass:[NSString class]] && tok.length) {
+                        self.idToken = tok;
+                        [[NSUserDefaults standardUserDefaults] setObject:tok forKey:kLDKeyIDToken];
+                        [[NSUserDefaults standardUserDefaults] synchronize];
+                        [self postMomentV1WithFileURL:fileURL isVideo:isVideo thumbnailURL:thumbnailURL caption:caption audience:audience extraOptions:extra completion:completion];
+                        return;
+                    }
+                    dispatch_async(dispatch_get_main_queue(), ^{ completion(json, nil); });
+                }];
+                return;
+            }
+        }
+        NSDictionary *j = json;
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(j, e); });
     }];
     [t resume];
+}
+
+- (void)postMomentV1WithFileURL:(NSURL *)fileURL
+                       isVideo:(BOOL)isVideo
+                       caption:(NSString *)caption
+                    completion:(LDJSONCompletion)completion {
+    [self postMomentV1WithFileURL:fileURL isVideo:isVideo thumbnailURL:nil caption:caption audience:@"all" extraOptions:nil completion:completion];
 }
 
 - (void)postMomentV2WithMediaInfo:(NSDictionary *)mediaInfo options:(NSDictionary *)options completion:(LDJSONCompletion)completion {

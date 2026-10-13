@@ -72,10 +72,42 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Syntax check mock server (no deps — node builtins only)
-        run: node --check Server/server.js
+      - name: Syntax check servers (no deps — node builtins only)
+        run: |
+          node --check Server/server.js
+          node --check Server/bridge/server.js
+      - name: Build bridge image (real self-host backend)
+        run: docker build -t locketlegacy-bridge ./Server/bridge
       - name: Build mock API image
         run: docker build -t locketlegacy-api ./Server
+
+  bridge-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Smoke test bridge (no creds — contract + validation only)
+        run: |
+          set -e
+          cd Server/bridge
+          node server.js > /tmp/bridge.log 2>&1 &
+          SRV=$!
+          trap "kill $SRV" EXIT
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:5001/api/health && break
+            sleep 1
+          done
+          curl -sf http://localhost:5001/api/health | python3 -c "import json,sys; j=json.load(sys.stdin); assert j['service']=='locketbridge' and 'official-upload' in j['features'], j; print('bridge health OK')"
+          curl -sf http://localhost:5001/connect | grep -o 'locketlegacy://connect'
+          curl -sf http://localhost:5001/api/overlays | python3 -c "import json,sys; d=json.load(sys.stdin)['data']; assert 'decorative' in d, d; print('bridge overlays OK')"
+          echo "=== bad login shape (Firebase rejects, Dio-shaped error) ==="
+          curl -s -X POST http://localhost:5001/locket/login -H 'Content-Type: application/json' -d '{"email":"nope@invalid.test","password":"wrong"}' \
+            | python3 -c "import json,sys; j=json.load(sys.stdin); assert j['success'] is False and 'error' in j, j; print('bad login OK:', j['message'][:60])"
+          echo "=== validation guards ==="
+          curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost:5001/locket/login -H 'Content-Type: application/json' -d '{}' | grep -q 400 && echo "login guard OK"
+          curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost:5001/locket/getMomentV2 -H 'Content-Type: application/json' -d '{}' | grep -q 401 && echo "auth guard OK"
+          curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost:5001/locket/postMomentV1 -H "Authorization: Bearer bad" -H 'Content-Type: application/json' -d '{}' | grep -q 401 && echo "upload auth guard OK"
+          curl -s -X POST http://localhost:5001/locket/refresh-token -H 'Content-Type: application/json' -d '{"refreshToken":"bad"}' \
+            | python3 -c "import json,sys; j=json.load(sys.stdin); assert j['success'] is False, j; print('refresh reject OK')"
 
   server-test:
     runs-on: ubuntu-latest

@@ -82,24 +82,30 @@ Upstream manual (`apps/self-hosted/README.md`) requires Firebase/R2 secrets and 
 (api :5001, storage :5003, web :5173). For iOS dev this repo ships a zero-config mock
 with the same routes:
 
+### Self-host backend (real Locket data, your own account)
+
+Default `docker compose` service is **LocketBridge** (`Server/bridge`, zero npm deps):
+Dio-compatible `/locket/*` routes backed by the **official Locket API** — login with
+your real Locket email/password in the app, no Dio account needed.
+
 ```bash
 docker compose up -d --build
-open http://localhost:5001/        # dashboard: connect QR + login/data/upload testers
+open http://<lan-ip>:5001/        # status page
 curl http://localhost:5001/api/health
-# login test:
-curl -X POST http://localhost:5001/locket/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"demo@locket.legacy","password":"x"}'
+# point the iOS app at http://<lan-ip>:5001 in Self-host mode (or Scan QR)
 ```
 
-No `npm install` runs during `docker build` (server uses node builtins only), so a
-blocked/unreachable npm registry will not break the build. If `docker build` still
-fails pulling `node:20-slim` with DNS errors (`EAI_AGAIN`), fix the host's Docker DNS:
+Endpoints: `login` (Firebase verifyPassword), `refresh-token`, `logout`,
+`getInfoUser`, `getMomentV2` (official feed + streak), `getAllFriendsV2`
+(Firestore), `postMomentV1` (multipart file + optional thumbnail + optionsData
+→ Firebase Storage → official payload → official post), `postMomentV2`,
+`getInfoMomentV2`, `reactToMoment`, `getAllMessageV2`/`sendMessage`,
+`api/overlays`, `api/push/register`. See `Server/bridge/README.md`.
 
+Mock (offline UI dev, fake data) still ships on `:5011`:
 ```bash
-docker run --rm alpine nslookup registry-1.docker.io   # should resolve
-# if not: echo '{"dns":["8.8.8.8","1.1.1.1"]}' | sudo tee /etc/docker/daemon.json
-sudo systemctl restart docker
+docker compose --profile mock up -d --build
+curl http://localhost:5011/api/health
 ```
 
 To use the real upstream backend instead:

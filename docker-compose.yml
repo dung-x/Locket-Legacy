@@ -1,17 +1,35 @@
-# LocketLegacy self-host (mock API compatible with upstream Client-Locket-Dio)
-# Upstream needs Firebase/R2 secrets; this mock runs with zero config for iOS dev.
-# Usage:
+# LocketLegacy self-host.
+# Default: LocketBridge — Dio-compatible routes backed by the OFFICIAL Locket
+# API with your own account (needs internet + real Locket credentials in-app).
 #   docker compose up -d --build
-#   curl http://localhost:5001/
-# iOS app: set API URL to http://<your-host>:5001 (Profile > API server)
+#   open http://<lan-ip>:5001/   (dashboard + connect QR)
+#
+# Mock (offline UI dev, fake data) on :5011:
+#   docker compose --profile mock up -d --build
+#   curl http://localhost:5011/api/health
 services:
   api:
     build:
-      context: ./Server
+      context: ./Server/bridge
       dockerfile: Dockerfile
-    container_name: locketlegacy-api
+    container_name: locketlegacy-bridge
     ports:
       - "5001:5001"
+    environment:
+      - PORT=5001
+    env_file:
+      - path: ./Server/bridge/.env
+        required: false
+    restart: unless-stopped
+
+  mock:
+    profiles: ["mock"]
+    build:
+      context: ./Server
+      dockerfile: Dockerfile
+    container_name: locketlegacy-mock
+    ports:
+      - "5011:5001"
     environment:
       - PORT=5001
     restart: unless-stopped

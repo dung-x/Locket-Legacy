@@ -22,7 +22,14 @@ typedef void (^LDJSONCompletion)(NSDictionary * _Nullable json, NSError * _Nulla
 - (void)getInfoMoment:(NSString *)momentId completion:(LDJSONCompletion)completion;
 - (void)getAllMessagesWithCompletion:(LDJSONCompletion)completion;
 
-// Upload — V1 multipart file+optionsData, V2 JSON mediaInfo+options
+// Upload — V1 multipart file+optionsData (+optional thumbnail), V2 JSON mediaInfo+options
+- (void)postMomentV1WithFileURL:(NSURL *)fileURL
+                       isVideo:(BOOL)isVideo
+                  thumbnailURL:(nullable NSURL *)thumbnailURL
+                       caption:(NSString *)caption
+                      audience:(NSString *)audience
+                  extraOptions:(nullable NSDictionary *)extra
+                    completion:(LDJSONCompletion)completion;
 - (void)postMomentV1WithFileURL:(NSURL *)fileURL
                        isVideo:(BOOL)isVideo
                        caption:(NSString *)caption
