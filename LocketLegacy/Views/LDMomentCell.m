@@ -1,9 +1,11 @@
 #import "LDMomentCell.h"
+#import "../API/LDMediaLoader.h"
 #import "../Models/LDMoment.h"
 
 @interface LDMomentCell ()
 @property (nonatomic, strong) UIImageView *iv;
 @property (nonatomic, strong) UILabel *cap;
+@property (nonatomic, copy) NSString *wantedURL;
 @end
 
 @implementation LDMomentCell
@@ -42,14 +44,23 @@
     self.iv.image = nil;
     // Grid prefers the thumbnail (matches web thumbs); falls back to full media.
     NSString *url = m.thumbnailURL.length ? m.thumbnailURL : (m.isVideo ? m.videoURL : m.imageURL);
-    if (!url.length) return;
-    NSURL *u = [NSURL URLWithString:url];
-    if (!u) return;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSData *d = [NSData dataWithContentsOfURL:u];
-        UIImage *img = d ? [UIImage imageWithData:d] : nil;
-        dispatch_async(dispatch_get_main_queue(), ^{ if (img) self.iv.image = img; });
-    });
+    if (!url.length) {
+        self.cap.text = [@"⚠️ no media URL — " stringByAppendingString:self.cap.text ?: @""];
+        return;
+    }
+    NSString *wanted = [url copy];
+    self.wantedURL = wanted;
+    [LDMediaLoader loadImageWithURLString:url completion:^(UIImage *img, NSInteger status, NSError *error) {
+        if (![self.wantedURL isEqualToString:wanted]) return; // reused cell
+        if (img) {
+            self.iv.image = img;
+        } else {
+            // Visible failure instead of a silently blank cell.
+            NSString *why = error ? error.localizedDescription : @"load failed";
+            self.cap.text = [NSString stringWithFormat:@"⚠️ %@\n%@", why, self.cap.text ?: @""];
+            NSLog(@"moment %@ image failed: %@", m.momentId, why);
+        }
+    }];
 }
 
 @end

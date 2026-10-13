@@ -643,9 +643,11 @@ static NSString * const kLDClientVersion = @"iOS1.0";
                     // straight to Locket (markMomentPayloadAsUsed is best-effort
                     // and skipped — no Dio-side moment id is available here).
                     if (progress) progress(@"3/3 asking Dio to build the payload…");
+                    NSString *mt = [[NSUserDefaults standardUserDefaults] stringForKey:kLDKeyMemberToken];
+                    NSString *member = ([mt isKindOfClass:[NSString class]] && mt.length) ? @"member:yes" : @"member:NO";
                     [self createMomentPayloadWithMediaInfo:mediaInfo options:options contentType:type completion:^(NSDictionary *json, NSError *error) {
                         if (error) {
-                            completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-4 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"step 3/3 (Dio payload): %@", error.localizedDescription]}]);
+                            completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-4 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"step 3/3 (Dio payload, %@): %@", member, error.localizedDescription]}]);
                             return;
                         }
                         id payload = json[@"payload"];
@@ -654,7 +656,7 @@ static NSString * const kLDClientVersion = @"iOS1.0";
                             NSString *m = json[@"message"];
                             if (![m isKindOfClass:[NSString class]]) m = json[@"error"];
                             if (![m isKindOfClass:[NSString class]] || !((NSString *)m).length) m = @"Dio built no payload";
-                            completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-4 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"step 3/3 (Dio payload): %@", m]}]);
+                            completion(nil, [NSError errorWithDomain:@"LocketLegacy" code:-4 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"step 3/3 (Dio payload, %@): %@", member, m]}]);
                             return;
                         }
                         if (progress) progress(@"4/4 posting to Locket…");

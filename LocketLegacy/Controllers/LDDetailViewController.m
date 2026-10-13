@@ -1,6 +1,7 @@
 // Moment detail: full media, meta, emoji reactions (❤️ 🔥 😂 + more).
 #import "LDDetailViewController.h"
 #import "../API/LDAPIClient.h"
+#import "../API/LDMediaLoader.h"
 #import "../Config.h"
 #import "../Models/LDMoment.h"
 
@@ -119,16 +120,20 @@
     NSString *url = self.moment.isVideo
         ? (self.moment.thumbnailURL.length ? self.moment.thumbnailURL : self.moment.videoURL)
         : (self.moment.imageURL.length ? self.moment.imageURL : self.moment.thumbnailURL);
-    if (!url.length) return;
+    if (!url.length) {
+        self.metaLabel.text = [self.metaLabel.text stringByAppendingString:@"\n⚠️ no media URL in this moment"];
+        return;
+    }
     if (self.moment.isVideo) { self.iv.image = nil; self.metaLabel.text = [self.metaLabel.text stringByAppendingString:[NSString stringWithFormat:@"\n▶ %@", self.moment.videoURL]]; }
-    if (!url.length) return;
-    NSURL *u = [NSURL URLWithString:url];
-    if (!u) return;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSData *d = [NSData dataWithContentsOfURL:u];
-        UIImage *img = d ? [UIImage imageWithData:d] : nil;
-        dispatch_async(dispatch_get_main_queue(), ^{ if (img) self.iv.image = img; });
-    });
+    self.metaLabel.text = [self.metaLabel.text stringByAppendingString:[NSString stringWithFormat:@"\n🔗 %@", url]];
+    [LDMediaLoader loadImageWithURLString:url completion:^(UIImage *img, NSInteger status, NSError *error) {
+        if (img) {
+            self.iv.image = img;
+        } else {
+            NSString *why = error ? error.localizedDescription : @"load failed";
+            self.metaLabel.text = [self.metaLabel.text stringByAppendingString:[NSString stringWithFormat:@"\n⚠️ %@", why]];
+        }
+    }];
 }
 
 - (void)refreshReactions {

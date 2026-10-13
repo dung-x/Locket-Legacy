@@ -445,6 +445,11 @@
     NSURL *file = [self stagedFileURL:isVideo];
     NSString *caption = self.captionField.text ?: @"";
     NSString *audience = (self.audience.selectedSegmentIndex == 1) ? @"selected" : @"all";
+    if ([audience isEqualToString:@"selected"] && self.selectedIds.count == 0) {
+        self.statusLabel.text = @"Pick at least one friend below for “Selected”, or switch to “All friends”.";
+        self.sendButton.enabled = YES;
+        return;
+    }
     NSString *icon = self.iconField.text.length ? self.iconField.text : self.selectedOverlay.icon;
     NSDictionary *extra = @{@"overlay_id": self.selectedOverlay.overlayId ?: @"standard",
                             @"type": self.selectedOverlay.type ?: @"default",
