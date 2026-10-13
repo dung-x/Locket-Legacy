@@ -509,30 +509,6 @@ static NSString * const kLDClientVersion = @"iOS1.0";
             });
         }];
         [up resume];
-    };
-    tryNext = ^(NSError *lastErr) {
-        if (hi >= hosts.count) {
-            finishPre(nil, lastErr);
-            return;
-        }
-        NSString *u = [hosts[hi++] stringByAppendingString:@"/api/presignedV3"];
-        [self POSTURL:u body:preBody completion:^(NSDictionary *json, NSInteger status, NSError *error) {
-            NSDictionary *data = [json isKindOfClass:[NSDictionary class]] ? json[@"data"] : nil;
-            BOOL ok = !error && [json[@"status"] isKindOfClass:[NSString class]] &&
-                      [json[@"status"] isEqualToString:@"success"] && [data isKindOfClass:[NSDictionary class]];
-            if (ok) finishPre(data, nil);
-            else {
-                NSString *msg = @"";
-                if ([json isKindOfClass:[NSDictionary class]]) {
-                    id m = json[@"message"];
-                    if ([m isKindOfClass:[NSString class]]) msg = m;
-                }
-                if (!msg.length) msg = error ? error.localizedDescription : [NSString stringWithFormat:@"HTTP %ld", (long)status];
-                tryNext([NSError errorWithDomain:@"LocketLegacy" code:-2 userInfo:@{NSLocalizedDescriptionKey: msg}]);
-            }
-        }];
-    };
-    tryNext(nil);
 }
 
 #pragma mark - Social / extras
